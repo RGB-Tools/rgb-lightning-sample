@@ -1,0 +1,71 @@
+version: '3.2'
+
+services:
+  rgb-node0:
+    container_name: rgb-node0
+    image: rgb-node:0.9
+    build: .
+    environment:
+      MYUID: 1000
+      MYGID: 1000
+      RGB_ELECTRUM_SERVER: electrs:50001
+    ports:
+      - 63963:63963
+    volumes:
+      - ./datargb0:/var/lib/rgb
+    working_dir: /var/lib/rgb
+  rgb-node1:
+    container_name: rgb-node1
+    image: rgb-node:0.9
+    build: .
+    environment:
+      MYUID: 1000
+      MYGID: 1000
+      RGB_ELECTRUM_SERVER: electrs:50001
+    ports:
+      - 63964:63963
+    volumes:
+      - ./datargb1:/var/lib/rgb
+    working_dir: /var/lib/rgb
+  rgb-node2:
+    container_name: rgb-node2
+    image: rgb-node:0.9
+    build: .
+    environment:
+      MYUID: 1000
+      MYGID: 1000
+      RGB_ELECTRUM_SERVER: electrs:50001
+    ports:
+      - 63965:63963
+    volumes:
+      - ./datargb2:/var/lib/rgb
+    working_dir: /var/lib/rgb
+  bitcoind:
+    container_name: bitcoind
+    image: registry.gitlab.com/hashbeam/docker/bitcoind:23.0
+    command: "-fallbackfee=0.0002"
+    environment:
+      MYUID: 1000
+      MYGID: 1000
+      RPCAUTH: "user:84c66d54d736d8b02aaa5b02e07e759b$$cc56c229b2a49ae2bfd5932cc8a6135d435bb9a7ac037ddd351d65936082c03d"
+    ports:
+      - 18443:18443
+    volumes:
+      - ./datacore:/srv/app/.bitcoin
+  electrs:
+    container_name: electrs
+    image: registry.gitlab.com/hashbeam/docker/electrs:0.9.9
+    environment:
+      MYUID: 1000
+      MYGID: 1000
+      BTCPASS: "password"
+    volumes:
+      - ./dataindex:/srv/app/db
+    depends_on:
+      - bitcoind
+    ports:
+      - 50001:50001
+  proxy:
+    image: ghcr.io/grunch/rgb-proxy-server:0.1.0
+    ports:
+      - 3000:3000

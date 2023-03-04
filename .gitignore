@@ -12,3 +12,13 @@ Cargo.lock
 
 # RPC auth
 .env
+
+# Test directories
+/datacore
+/dataindex
+/dataldk0
+/dataldk1
+/dataldk2
+/datargb0
+/datargb1
+/datargb2

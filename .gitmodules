@@ -1,0 +1,18 @@
+[submodule "bp-core"]
+	path = bp-core
+	url = git@github.com:RGB-Tools/bp-core.git
+[submodule "client_side_validation"]
+	path = client_side_validation
+	url = git@github.com:RGB-Tools/client_side_validation.git
+[submodule "rgb-core"]
+	path = rgb-core
+	url = git@github.com:RGB-Tools/rgb-core.git
+[submodule "rgb-node"]
+	path = rgb-node
+	url = git@github.com:RGB-Tools/rgb-node.git
+[submodule "rust-rgb20"]
+	path = rust-rgb20
+	url = git@github.com:RGB-Tools/rust-rgb20.git
+[submodule "rust-lightning"]
+	path = rust-lightning
+	url = git@github.com:RGB-Tools/rust-lightning.git

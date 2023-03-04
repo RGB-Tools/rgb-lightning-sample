@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 pub(crate) fn parse_startup_args() -> Result<LdkUserInfo, ()> {
-	if env::args().len() < 3 {
-		println!("ldk-tutorial-node requires 3 arguments: `cargo run [<bitcoind-rpc-username>:<bitcoind-rpc-password>@]<bitcoind-rpc-host>:<bitcoind-rpc-port> ldk_storage_directory_path [<ldk-incoming-peer-listening-port>] [bitcoin-network] [announced-node-name announced-listen-addr*]`");
+	if env::args().len() < 4 {
+		println!("ldk-tutorial-node requires 4 arguments: `cargo run [<bitcoind-rpc-username>:<bitcoind-rpc-password>@]<bitcoind-rpc-host>:<bitcoind-rpc-port> ldk_storage_directory_path rgb-node-port [<ldk-incoming-peer-listening-port>] [bitcoin-network] [announced-node-name announced-listen-addr*]`");
 		return Err(());
 	}
 	let bitcoind_rpc_info = env::args().skip(1).next().unwrap();
@@ -27,8 +27,16 @@ pub(crate) fn parse_startup_args() -> Result<LdkUserInfo, ()> {
 
 	let ldk_storage_dir_path = env::args().skip(2).next().unwrap();
 
+	let rgb_node_port = match env::args().skip(3).next().unwrap().parse::<u16>() {
+		Ok(p) => p,
+		Err(_) => {
+			println!("ERROR: rgb node port must be a number");
+			return Err(());
+		},
+	};
+
 	let mut ldk_peer_port_set = true;
-	let ldk_peer_listening_port: u16 = match env::args().skip(3).next().map(|p| p.parse()) {
+	let ldk_peer_listening_port: u16 = match env::args().skip(4).next().map(|p| p.parse()) {
 		Some(Ok(p)) => p,
 		Some(Err(_)) => {
 			ldk_peer_port_set = false;
@@ -41,8 +49,8 @@ pub(crate) fn parse_startup_args() -> Result<LdkUserInfo, ()> {
 	};
 
 	let mut arg_idx = match ldk_peer_port_set {
-		true => 4,
-		false => 3,
+		true => 5,
+		false => 4,
 	};
 	let network: Network = match env::args().skip(arg_idx).next().as_ref().map(String::as_str) {
 		Some("testnet") => Network::Testnet,
@@ -109,6 +117,7 @@ pub(crate) fn parse_startup_args() -> Result<LdkUserInfo, ()> {
 		bitcoind_rpc_host,
 		bitcoind_rpc_port,
 		ldk_storage_dir_path,
+		rgb_node_port,
 		ldk_peer_listening_port,
 		ldk_announced_listen_addr,
 		ldk_announced_node_name,

@@ -8,16 +8,16 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lightning = { version = "0.0.113", features = ["max_level_trace"] }
+lightning = { version = "0.0.113", features = ["max_level_trace"], path = "./rust-lightning/lightning" }
 lightning-block-sync = { version = "0.0.113", features = [ "rpc-client" ] }
-lightning-invoice = { version = "0.21" }
+lightning-invoice = { version = "0.21", path = "./rust-lightning/lightning-invoice" }
 lightning-net-tokio = { version = "0.0.113" }
-lightning-persister = { version = "0.0.113" }
+lightning-persister = { version = "0.0.113", path = "./rust-lightning/lightning-persister" }
 lightning-background-processor = { version = "0.0.113" }
 lightning-rapid-gossip-sync = { version = "0.0.113" }
 
 base64 = "0.13.0"
-bitcoin = "0.29.0"
+bitcoin = "0.29.2"
 bitcoin-bech32 = "0.12"
 bech32 = "0.8"
 hex = "0.3"
@@ -28,6 +28,36 @@ chrono = "0.4"
 rand = "0.4"
 serde_json = { version = "1.0" }
 tokio = { version = "1", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
+
+# RGB and related
+amplify = "3.13.0"
+amplify_num = "0.4.1"
+bdk = { version = "0.27", features = ["electrum", "keys-bip39", "sqlite-bundled"] }
+bp-core = { version = "0.9.0", features = ["psbt", "wallet"], path = "./bp-core" }
+internet2 = "0.9.0"
+lnpbp = "0.9.0"
+lnpbp-invoice = { version = "0.9.0", features = ["rgb"] }
+miniscript = { version = "8.0", features = ["serde"] }
+psbt = "0.9.0"
+reqwest = { version = "0.11", default-features = false, features = ["json", "multipart", "native-tls", "stream"] }
+rgb-std = "0.9.0"
+rgb20 = { version = "0.9.0", path = "./rust-rgb20" }
+rgb_rpc = { version = "0.9.1", path = "./rgb-node/rpc" }
+serde = { version = "^1.0", features = ["derive"] }
+stens = "0.9.0"
+strict_encoding = "0.9.0"
+thiserror = "1.0"
+tokio-util = { version = "0.7.4", features = ["codec"] }
+
+[patch.crates-io]
+bp-core = {  path = "./bp-core" }
+bp-seals = { path = "./bp-core/seals" }
+commit_verify = { path = "./client_side_validation/commit_verify" }
+lightning = { path = "./rust-lightning/lightning" }
+lightning-background-processor = { path = "./rust-lightning/lightning-background-processor"}
+rgb20 = { path = "./rust-rgb20" }
+rgb_core = { package = "rgb-core", path = "./rgb-core" }
+rgb_rpc = { path = "./rgb-node/rpc" }
 
 [profile.release]
 panic = "abort"

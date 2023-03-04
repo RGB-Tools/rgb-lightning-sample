@@ -1,4 +1,4 @@
-use crate::convert::{BlockchainInfo, FeeResponse, FundedTx, NewAddress, RawTx, SignedTx};
+use crate::convert::{BlockchainInfo, FeeResponse, FundedTx, NewAddress, RawTx, SignedTx, Generated};
 use base64;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::consensus::encode;
@@ -188,6 +188,7 @@ impl BitcoindClient {
 			// LDK-based applications should enable RBF bumping and RBF bump either to a local
 			// change address or to a new channel output negotiated with the same node.
 			"replaceable": false,
+			"changePosition": 1,
 		});
 		self.bitcoind_rpc_client
 			.call_method("fundrawtransaction", &[raw_tx_json, options])
@@ -224,6 +225,24 @@ impl BitcoindClient {
 	pub async fn get_blockchain_info(&self) -> BlockchainInfo {
 		self.bitcoind_rpc_client
 			.call_method::<BlockchainInfo>("getblockchaininfo", &vec![])
+			.await
+			.unwrap()
+	}
+
+	pub async fn generate_to_adress(&self, blocks: u16, address: String) -> Generated {
+		let blocks = serde_json::json!(blocks);
+		let address = serde_json::json!(address);
+		self.bitcoind_rpc_client
+			.call_method::<Generated>("generatetoaddress", &vec![blocks, address])
+			.await
+			.unwrap()
+	}
+
+	pub async fn send_to_address(&self, address: String, amount: f64) -> Txid {
+		let address = serde_json::json!(address);
+		let amount = serde_json::json!(amount);
+		self.bitcoind_rpc_client
+			.call_method::<Txid>("sendtoaddress", &vec![address, amount])
 			.await
 			.unwrap()
 	}
