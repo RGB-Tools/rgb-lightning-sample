@@ -19,9 +19,9 @@ asset_balance 2
 blind 1
 send_assets 2 300
 mine 1
-asset_balance 1
-refresh 2
 asset_balance 2
+refresh 1
+asset_balance 1
 
 # send assets 1->2 (2)
 blind 2
@@ -35,6 +35,6 @@ asset_balance 2
 blind 1
 send_assets 2 100
 mine 1
-asset_balance 1
-refresh 2
 asset_balance 2
+refresh 1
+asset_balance 1

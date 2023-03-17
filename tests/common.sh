@@ -154,7 +154,7 @@ send_assets() {
     $TMUX_CMD send-keys -t node$num "sendasset $asset_id $rgb_amt $blinded_utxo" C-m
     timestamp
     check $num
-    _wait_for_text $T_1 node$num "RGB send complete"
+    _wait_for_text_multi $T_1 node$num "sendasset" "RGB send complete"
     timestamp
     sleep 1
 }
@@ -180,21 +180,21 @@ open_channel() {
     _tit "open channel from node $src_num to node $dst_num with $rgb_amt assets"
     $TMUX_CMD send-keys -t node$src_num "openchannel $dst_id@127.0.0.1:$dst_port 999666 546000 $asset_id $rgb_amt --public" C-m
     check $src_num
-    _wait_for_text $T_5 node$src_num "HANDLED ACCEPT CHANNEL"
+    _wait_for_text_multi $T_5 node$src_num "openchannel" "HANDLED ACCEPT CHANNEL"
     timestamp
-    _wait_for_text $T_5 node$src_num "FUNDING COMPLETED"
+    _wait_for_text_multi $T_5 node$src_num "openchannel" "FUNDING COMPLETED"
     timestamp
-    _wait_for_text $T_5 node$src_num "HANDLED FUNDING SIGNED"
+    _wait_for_text_multi $T_5 node$src_num "openchannel" "HANDLED FUNDING SIGNED"
     timestamp
     check $dst_num
     _wait_for_text $T_5 node$dst_num "HANDLED OPEN CHANNEL"
     timestamp
-    _wait_for_text $T_5 node$dst_num "HANDLED FUNDING CREATED"
+    _wait_for_text_multi $T_5 node$dst_num "HANDLED OPEN CHANNEL" "HANDLED FUNDING CREATED"
     timestamp
 
     mine 6
     check $src_num
-    _wait_for_text $T_10 node$src_num "EVENT: Channel .* with peer .* is ready to be used"
+    _wait_for_text_multi $T_10 node$src_num "mine" "EVENT: Channel .* with peer .* is ready to be used"
     timestamp
     _wait_for_text_multi $T_5 node$src_num "EVENT: Channel .* with peer .* is ready to be used" "HANDLED CHANNEL UPDATE"
     timestamp
@@ -220,6 +220,7 @@ list_channels() {
     lines=$((chan_num*20))
     _subtit "list channels ($chan_num expected) on node $node_num"
     $TMUX_CMD send-keys -t node$node_num "listchannels" C-m
+    sleep 1
     text="$(_wait_for_text 5 node$node_num "listchannels" $lines | sed -n '/^\[/,/^\]/p')"
     echo "$text"
     matches=$(echo "$text" | grep -c "is_channel_ready: true")
@@ -309,7 +310,7 @@ keysend_init() {
     $TMUX_CMD send-keys -t node$src_num "keysend $dst_id 3000000 $asset_id $rgb_amt" C-m
     timestamp
     check $src_num
-    _wait_for_text $T_5 node$src_num "EVENT: initiated sending"
+    _wait_for_text_multi $T_5 node$src_num "keysend" "EVENT: initiated sending"
     timestamp
 }
 
@@ -322,7 +323,7 @@ keysend() {
 
     keysend_init $src_num $dst_num $dst_id $rgb_amt
 
-    _wait_for_text $T_15 node$src_num "EVENT: successfully sent payment"
+    _wait_for_text_multi $T_15 node$src_num "keysend" "EVENT: successfully sent payment"
     timestamp
     _wait_for_text_multi $T_5 node$src_num "EVENT: successfully sent payment" "HANDLED REVOKE AND ACK"
     timestamp

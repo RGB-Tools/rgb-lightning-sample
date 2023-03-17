@@ -106,7 +106,8 @@ while [ -n "$1" ]; do
             stop=1
             ;;
         -t|--test)
-            script="${prog}/scripts/${2}.sh"
+            script_name="$2"
+            script="${prog}/scripts/${script_name}.sh"
             [ -r "$script" ] || _die "script \"$script\" not found"
             shift
             ;;
@@ -132,13 +133,19 @@ fi
 [ "$start" = "1" ] && _start_services
 
 # start expect script if requested
-if [ -n "$script" ]; then
+if [ -n "$script" ] && [ -n "$script_name" ]; then
+    echo
+    echo "starting test script: $script_name"
     _start_tmux
     bash "$script"
 fi
 
 # stop services if requested
 if [ "$stop" = "1" ]; then
+    echo
+    echo "test complete, services will now be stopped"
+    echo
+    read -p "press <enter> to continue"
     _stop_services
     _stop_tmux
 fi
