@@ -11,7 +11,6 @@ use bitcoin::{PrivateKey, Transaction};
 
 const DERIVATION_PATH_ACCOUNT: u32 = 0;
 const BDK_DB_NAME: &str = "bdk_db";
-const ELECTRUM_URL: &str = "127.0.0.1:50001";
 
 pub(crate) fn calculate_descriptor_from_xprv(
 	xprv: ExtendedPrivKey, network: Network, change: bool,
@@ -53,9 +52,9 @@ pub(crate) fn get_bdk_wallet_seckey(
 	Wallet::new(P2Wpkh(priv_key), None, network, bdk_database).expect("valid bdk wallet")
 }
 
-pub(crate) fn broadcast_tx(tx: &Transaction) {
+pub(crate) fn broadcast_tx(tx: &Transaction, electrum_url: String) {
 	let config = ElectrumBlockchainConfig {
-		url: ELECTRUM_URL.to_string(),
+		url: electrum_url,
 		socks5: None,
 		retry: 3,
 		timeout: Some(5),
@@ -66,9 +65,9 @@ pub(crate) fn broadcast_tx(tx: &Transaction) {
 	blockchain.broadcast(tx).expect("able to broadcast");
 }
 
-pub(crate) fn sync_wallet(wallet: &Wallet<SqliteDatabase>) {
+pub(crate) fn sync_wallet(wallet: &Wallet<SqliteDatabase>, electrum_url: String) {
 	let config = ElectrumBlockchainConfig {
-		url: ELECTRUM_URL.to_string(),
+		url: electrum_url,
 		socks5: None,
 		retry: 3,
 		timeout: Some(5),

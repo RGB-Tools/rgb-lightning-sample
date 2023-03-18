@@ -32,26 +32,25 @@ use stens::AsciiString;
 use crate::bdk_utils::sync_wallet;
 use crate::error::Error;
 
-pub(crate) fn get_rgb_node_client(port: u16) -> Client {
+pub(crate) fn get_rgb_node_client(port: u16, rgb_network: Chain) -> Client {
 	let ip = Ipv4Addr::new(127, 0, 0, 1);
 	let rgb_node_endpoint = ServiceAddr::Tcp(SocketAddr::V4(SocketAddrV4::new(ip, port)));
-	let rgb_network =
-		Chain::Regtest(BlockHash::from_slice(GENESIS_HASH_REGTEST).expect("valid bloch hash"));
 	Client::with(rgb_node_endpoint, "rgb-ln-node".to_string(), rgb_network)
 		.expect("Error initializing client")
 }
 
 pub(crate) fn get_rgb_total_amount(
 	contract_id: ContractId, rgb_node_client: Arc<Mutex<Client>>,
-	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>, electrum_url: String,
 ) -> Result<u64, Error> {
-	let asset_owned_values = get_asset_owned_values(contract_id, rgb_node_client, wallet_arc)?;
+	let asset_owned_values =
+		get_asset_owned_values(contract_id, rgb_node_client, wallet_arc, electrum_url)?;
 	Ok(asset_owned_values.iter().map(|ov| ov.state.value).sum())
 }
 
 pub(crate) fn get_asset_owned_values(
 	contract_id: ContractId, rgb_node_client: Arc<Mutex<Client>>,
-	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>, electrum_url: String,
 ) -> Result<Vec<AssignedState<rgb::value::Revealed>>, Error> {
 	let mut rgb_client = rgb_node_client.lock().unwrap();
 	let contract_state = match rgb_client.contract_state(contract_id) {
@@ -59,7 +58,7 @@ pub(crate) fn get_asset_owned_values(
 		Err(_e) => return Err(Error::UnknownContractId),
 	};
 	let wallet = wallet_arc.lock().unwrap();
-	sync_wallet(&wallet);
+	sync_wallet(&wallet, electrum_url);
 	let unspents_outpoints: Vec<OutPoint> =
 		wallet.list_unspent().expect("valid unspent list").iter().map(|u| u.outpoint).collect();
 	Ok(contract_state

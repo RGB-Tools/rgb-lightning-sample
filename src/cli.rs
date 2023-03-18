@@ -2,17 +2,18 @@ use crate::bdk_utils::sync_wallet;
 use crate::bitcoind_client::BitcoindClient;
 use crate::broadcast_tx;
 use crate::disk;
+use crate::error::Error;
 use crate::hex_utils;
 use crate::proxy::Proxy;
 use crate::rgb_utils::get_asset_owned_values;
 use crate::rgb_utils::get_rgb_total_amount;
 use crate::rgb_utils::RgbUtilities;
 use crate::seal::Revealed;
-use crate::PROXY_URL;
 use crate::{
 	ChannelManager, HTLCStatus, InvoicePayer, MillisatAmount, NetworkGraph, OnionMessenger,
 	PaymentInfo, PaymentInfoStorage, PeerManager,
 };
+use crate::{FEE_RATE, UTXO_SIZE_SAT};
 use amplify::bmap;
 use bdk::bitcoin::hashes::Hash;
 use bdk::bitcoin::OutPoint;
@@ -28,7 +29,9 @@ use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::onion_message::{CustomOnionMessageContents, Destination, OnionMessageContents};
-use lightning::rgb_utils::{get_rgb_channel_info, write_rgb_channel_info, RgbInfo};
+use lightning::rgb_utils::{
+	get_rgb_channel_info, write_rgb_channel_info, RgbInfo, RgbUtxo, RgbUtxos,
+};
 use lightning::routing::gossip::NodeId;
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning::util::events::EventHandler;
@@ -63,6 +66,9 @@ use stens::AsciiString;
 use strict_encoding::strict_deserialize;
 use strict_encoding::strict_serialize;
 use strict_encoding::StrictEncode;
+
+const MIN_CREATE_UTXOS_SATS: u64 = 10000;
+const UTXO_NUM: u8 = 10;
 
 const OPENCHANNEL_MIN_SAT: u64 = 5000;
 const OPENCHANNEL_MAX_SAT: u64 = 16777215;
@@ -115,7 +121,8 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 	inbound_payments: PaymentInfoStorage, outbound_payments: PaymentInfoStorage,
 	ldk_data_dir: String, network: Network, logger: Arc<disk::FilesystemLogger>,
 	bitcoind_client: Arc<BitcoindClient>, rgb_node_client: Arc<Mutex<Client>>,
-	proxy_client: Arc<RestClient>, wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	proxy_client: Arc<RestClient>, proxy_url: &str, wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	electrum_url: String,
 ) {
 	println!(
 		"LDK startup successful. Enter \"help\" to view available commands. Press Ctrl-D to quit."
@@ -140,6 +147,10 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 			match word {
 				"help" => help(),
 				"mine" => {
+					if network != Network::Regtest {
+						println!("ERROR: mine command is available only on regtest");
+						continue;
+					}
 					let num_blocks = words.next();
 
 					if num_blocks.is_none() {
@@ -154,6 +165,87 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					}
 
 					mine(&bitcoind_client, num_blocks.unwrap()).await;
+				}
+				"listunspent" => {
+					let wallet = wallet_arc.lock().unwrap();
+					let unspents = wallet.list_unspent().expect("unspents");
+					println!("Unspents:");
+					for unspent in unspents {
+						println!(" - {unspent:?}");
+					}
+				}
+				"getaddress" => {
+					let wallet = wallet_arc.lock().unwrap();
+					let address = wallet
+						.get_address(bdk::wallet::AddressIndex::New)
+						.expect("valid address")
+						.address;
+					println!("Address: {address}");
+				}
+				"createutxos" => {
+					let wallet = wallet_arc.lock().unwrap();
+					sync_wallet(&wallet, electrum_url.clone());
+
+					let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir.clone());
+					let serialized_utxos =
+						fs::read_to_string(&rgb_utxos_path).expect("able to read rgb utxos file");
+					let mut rgb_utxos: RgbUtxos =
+						serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+					let unspendable_utxos: Vec<OutPoint> =
+						rgb_utxos.utxos.iter().map(|u| u.outpoint).collect();
+
+					let unspendable_amt: u64 = wallet
+						.list_unspent()
+						.expect("unspents")
+						.iter()
+						.filter(|u| unspendable_utxos.contains(&u.outpoint))
+						.map(|u| u.txout.value)
+						.sum();
+					let available =
+						wallet.get_balance().expect("wallet balance").get_total() - unspendable_amt;
+					if available < MIN_CREATE_UTXOS_SATS {
+						println!(
+							"ERROR: not enough funds, call getaddress and send {} satoshis",
+							MIN_CREATE_UTXOS_SATS - available
+						);
+						continue;
+					}
+
+					let mut tx_builder = wallet.build_tx();
+					tx_builder
+						.unspendable(unspendable_utxos)
+						.fee_rate(FeeRate::from_sat_per_vb(FEE_RATE))
+						.ordering(bdk::wallet::tx_builder::TxOrdering::Untouched);
+					for _i in 0..UTXO_NUM {
+						tx_builder.add_recipient(
+							wallet
+								.get_address(bdk::wallet::AddressIndex::New)
+								.expect("address")
+								.script_pubkey(),
+							UTXO_SIZE_SAT,
+						);
+					}
+					let (mut psbt, _details) =
+						tx_builder.finish().expect("successful psbt creation");
+
+					wallet.sign(&mut psbt, SignOptions::default()).expect("successful sign");
+
+					let tx = psbt.extract_tx();
+					broadcast_tx(&tx, electrum_url.clone());
+
+					for i in 0..UTXO_NUM {
+						rgb_utxos.utxos.push(RgbUtxo {
+							outpoint: OutPoint { txid: tx.txid(), vout: i as u32 },
+							colored: false,
+						});
+					}
+					let serialized_utxos =
+						serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
+					fs::write(rgb_utxos_path, serialized_utxos)
+						.expect("able to write rgb utxos file");
+
+					sync_wallet(&wallet, electrum_url.clone());
+					println!("UTXO creation complete");
 				}
 				"issueasset" => {
 					let amount = words.next();
@@ -191,8 +283,29 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						continue;
 					}
 
-					let wallet = wallet_arc.lock().unwrap();
-					let outpoint = gen_utxo(&wallet, &bitcoind_client).await;
+					match check_uncolored_utxos(&ldk_data_dir).await {
+						Ok(_) => {}
+						Err(e) => {
+							println!("{e}");
+							continue;
+						}
+					}
+					let outpoint = get_utxo(&ldk_data_dir).await.outpoint;
+					let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir.clone());
+					let serialized_utxos =
+						fs::read_to_string(&rgb_utxos_path).expect("able to read rgb utxos file");
+					let mut rgb_utxos: RgbUtxos =
+						serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+					rgb_utxos
+						.utxos
+						.iter_mut()
+						.find(|u| u.outpoint == outpoint)
+						.expect("UTXO found")
+						.colored = true;
+					let serialized_utxos =
+						serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
+					fs::write(rgb_utxos_path, serialized_utxos)
+						.expect("able to write rgb utxos file");
 
 					let contract_id = rgb_node_client.lock().unwrap().issue_contract(
 						amount.unwrap(),
@@ -222,6 +335,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						contract_id.unwrap(),
 						rgb_node_client.clone(),
 						wallet_arc.clone(),
+						electrum_url.clone(),
 					) {
 						Ok(a) => a,
 						Err(e) => {
@@ -269,6 +383,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						contract_id,
 						rgb_node_client.clone(),
 						wallet_arc.clone(),
+						electrum_url.clone(),
 					) {
 						Ok(a) => a,
 						Err(e) => {
@@ -286,6 +401,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						contract_id,
 						rgb_node_client.clone(),
 						wallet_arc.clone(),
+						electrum_url.clone(),
 					)
 					.expect("known contract");
 					let mut rgb_inputs: Vec<OutPoint> = vec![];
@@ -304,7 +420,29 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 
 					let rgb_change_amount = input_amount - amt_rgb;
 					let rgb_change: Vec<AllocatedValue> = if rgb_change_amount > 0 {
-						let rgb_change_outpoint = gen_utxo(&wallet, &bitcoind_client).await;
+						match check_uncolored_utxos(&ldk_data_dir).await {
+							Ok(_) => {}
+							Err(e) => {
+								println!("{e}");
+								continue;
+							}
+						}
+						let rgb_change_outpoint = get_utxo(&ldk_data_dir).await.outpoint;
+						let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir.clone());
+						let serialized_utxos = fs::read_to_string(&rgb_utxos_path)
+							.expect("able to read rgb utxos file");
+						let mut rgb_utxos: RgbUtxos =
+							serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+						rgb_utxos
+							.utxos
+							.iter_mut()
+							.find(|u| u.outpoint == rgb_change_outpoint)
+							.expect("UTXO found")
+							.colored = true;
+						let serialized_utxos =
+							serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
+						fs::write(rgb_utxos_path, serialized_utxos)
+							.expect("able to write rgb utxos file");
 						vec![AllocatedValue {
 							value: rgb_change_amount,
 							seal: ExplicitSeal::from_str(&format!(
@@ -328,7 +466,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					builder
 						.add_utxos(&rgb_inputs)
 						.expect("valid utxos")
-						.fee_rate(FeeRate::from_sat_per_vb(1.5))
+						.fee_rate(FeeRate::from_sat_per_vb(FEE_RATE))
 						.manually_selected_only()
 						.drain_to(address.script_pubkey());
 					let psbt = builder.finish().expect("valid psbt finish").0;
@@ -356,31 +494,51 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 
 					let proxy_ref = (*proxy_client).clone();
 					let res = proxy_ref.post_consignment(
-						PROXY_URL,
+						proxy_url,
 						blinded_utxo.to_string(),
 						consignment_path.into(),
 					);
 					if res.is_err() || res.unwrap().result.is_none() {
 						println!("ERROR: unable to post consignment");
-						return;
+						continue;
 					}
 
 					wallet.sign(&mut psbt, SignOptions::default()).expect("able to sign");
 					let tx = psbt.extract_tx();
-					broadcast_tx(&tx);
-					mine(&bitcoind_client, 1).await;
+					broadcast_tx(&tx, electrum_url.clone());
 
 					let _status = rgb_client
 						.consume_transfer(consignment, true, None, |_| ())
 						.expect("valid consume tranfer");
 
 					drop(rgb_client);
-					sync_wallet(&wallet);
+					sync_wallet(&wallet, electrum_url.clone());
 					println!("RGB send complete, txid: {}", tx.txid().to_string());
 				}
 				"receiveasset" => {
-					let wallet = wallet_arc.lock().unwrap();
-					let outpoint = gen_utxo(&wallet, &bitcoind_client).await;
+					match check_uncolored_utxos(&ldk_data_dir).await {
+						Ok(_) => {}
+						Err(e) => {
+							println!("{e}");
+							continue;
+						}
+					}
+					let outpoint = get_utxo(&ldk_data_dir).await.outpoint;
+					let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir.clone());
+					let serialized_utxos =
+						fs::read_to_string(&rgb_utxos_path).expect("able to read rgb utxos file");
+					let mut rgb_utxos: RgbUtxos =
+						serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+					rgb_utxos
+						.utxos
+						.iter_mut()
+						.find(|u| u.outpoint == outpoint)
+						.expect("UTXO found")
+						.colored = true;
+					let serialized_utxos =
+						serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
+					fs::write(rgb_utxos_path, serialized_utxos)
+						.expect("able to write rgb utxos file");
 
 					let seal = Revealed::new(CloseMethod::OpretFirst, outpoint);
 					let concealed_seal = seal.to_concealed_seal();
@@ -416,7 +574,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						let blinded_utxo = blinded_info.seal.to_concealed_seal().to_string();
 
 						let proxy_ref = (*proxy_client).clone();
-						let res = proxy_ref.get_consignment(PROXY_URL, blinded_utxo);
+						let res = proxy_ref.get_consignment(proxy_url, blinded_utxo);
 						if res.is_err() || res.as_ref().unwrap().result.is_none() {
 							println!("WARNING: unable to get consignment");
 							continue;
@@ -454,12 +612,12 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						}
 
 						let wallet = wallet_arc.lock().unwrap();
-						sync_wallet(&wallet);
+						sync_wallet(&wallet, electrum_url.clone());
 
 						fs::remove_file(bf.unwrap().path()).expect("successful file remove");
-
-						println!("Refresh complete");
 					}
+
+					println!("Refresh complete");
 				}
 				"openchannel" => {
 					let peer_pubkey_and_ip_addr = words.next();
@@ -538,6 +696,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						contract_id,
 						rgb_node_client.clone(),
 						wallet_arc.clone(),
+						electrum_url.clone(),
 					) {
 						Ok(a) => a,
 						Err(e) => {
@@ -574,6 +733,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						push_amt_msat,
 						announce_channel,
 						channel_manager.clone(),
+						proxy_url,
 					);
 					if open_channel_result.is_err() {
 						continue;
@@ -948,7 +1108,11 @@ fn help() {
 	println!("      listpayments");
 	println!("\n  Invoices:");
 	println!("      getinvoice <amt_msats> <expiry_secs>");
+	println!("\n  Onchain:");
+	println!("      getaddress");
+	println!("      listunspent");
 	println!("\n  RGB:");
+	println!("      createutxos");
 	println!("      issueasset <supply> <ticker> <name> <precision>");
 	println!("      assetbalance <contract_id>");
 	println!("      sendasset <rgb_contract_id> <amt_rgb>");
@@ -1149,7 +1313,7 @@ fn do_disconnect_peer(
 
 fn open_channel(
 	peer_pubkey: PublicKey, channel_amt_sat: u64, push_amt_msat: u64, announced_channel: bool,
-	channel_manager: Arc<ChannelManager>,
+	channel_manager: Arc<ChannelManager>, proxy_url: &str,
 ) -> Result<[u8; 32], ()> {
 	let config = UserConfig {
 		channel_handshake_limits: ChannelHandshakeLimits {
@@ -1166,7 +1330,7 @@ fn open_channel(
 	};
 
 	let consignment_endpoint =
-		ConsignmentEndpoint::from_str(&format!("rgbhttpjsonrpc:{}", PROXY_URL)).unwrap();
+		ConsignmentEndpoint::from_str(&format!("rgbhttpjsonrpc:{}", proxy_url)).unwrap();
 	match channel_manager.create_channel(
 		peer_pubkey,
 		channel_amt_sat,
@@ -1369,21 +1533,22 @@ pub(crate) fn parse_peer_info(
 	Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))
 }
 
-pub(crate) async fn gen_utxo(
-	wallet: &Wallet<SqliteDatabase>, bitcoind_client: &BitcoindClient,
-) -> OutPoint {
-	let address =
-		wallet.get_address(bdk::wallet::AddressIndex::New).expect("valid address").address;
-	bitcoind_client.send_to_address(address.to_string(), 0.7).await;
-	mine(bitcoind_client, 1).await;
-	sync_wallet(wallet);
-	wallet
-		.list_unspent()
-		.expect("valid unspent list")
-		.iter()
-		.find(|u| u.txout.script_pubkey == address.script_pubkey())
-		.expect("to find address unspent")
-		.outpoint
+pub(crate) async fn check_uncolored_utxos(ldk_data_dir: &str) -> Result<(), Error> {
+	let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir);
+	let serialized_utxos = fs::read_to_string(rgb_utxos_path).expect("able to read rgb utxos file");
+	let rgb_utxos: RgbUtxos = serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+	let utxo = rgb_utxos.utxos.iter().find(|u| !u.colored);
+	match utxo {
+		Some(_) => Ok(()),
+		None => Err(Error::NoAvailableUtxos),
+	}
+}
+
+pub(crate) async fn get_utxo(ldk_data_dir: &str) -> RgbUtxo {
+	let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir);
+	let serialized_utxos = fs::read_to_string(rgb_utxos_path).expect("able to read rgb utxos file");
+	let rgb_utxos: RgbUtxos = serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+	rgb_utxos.utxos.into_iter().find(|u| !u.colored).expect("at least one unlocked UTXO")
 }
 
 pub(crate) async fn mine(bitcoind_client: &BitcoindClient, num_blocks: u16) {

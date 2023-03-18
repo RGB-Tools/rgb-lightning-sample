@@ -1,6 +1,4 @@
-use crate::convert::{
-	BlockchainInfo, FeeResponse, FundedTx, Generated, NewAddress, RawTx, SignedTx,
-};
+use crate::convert::{BlockchainInfo, FeeResponse, Generated, NewAddress};
 use base64;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::consensus::encode;
@@ -166,54 +164,6 @@ impl BitcoindClient {
 		RpcClient::new(&rpc_credentials, http_endpoint)
 	}
 
-	pub async fn create_raw_transaction(&self, outputs: Vec<HashMap<String, f64>>) -> RawTx {
-		let outputs_json = serde_json::json!(outputs);
-		self.bitcoind_rpc_client
-			.call_method::<RawTx>(
-				"createrawtransaction",
-				&vec![serde_json::json!([]), outputs_json],
-			)
-			.await
-			.unwrap()
-	}
-
-	pub async fn fund_raw_transaction(&self, raw_tx: RawTx) -> FundedTx {
-		let raw_tx_json = serde_json::json!(raw_tx.0);
-		let options = serde_json::json!({
-			// LDK gives us feerates in satoshis per KW but Bitcoin Core here expects fees
-			// denominated in satoshis per vB. First we need to multiply by 4 to convert weight
-			// units to virtual bytes, then divide by 1000 to convert KvB to vB.
-			"fee_rate": self.get_est_sat_per_1000_weight(ConfirmationTarget::Normal) as f64 / 250.0,
-			// While users could "cancel" a channel open by RBF-bumping and paying back to
-			// themselves, we don't allow it here as its easy to have users accidentally RBF bump
-			// and pay to the channel funding address, which results in loss of funds. Real
-			// LDK-based applications should enable RBF bumping and RBF bump either to a local
-			// change address or to a new channel output negotiated with the same node.
-			"replaceable": false,
-			"changePosition": 1,
-		});
-		self.bitcoind_rpc_client
-			.call_method("fundrawtransaction", &[raw_tx_json, options])
-			.await
-			.unwrap()
-	}
-
-	pub async fn send_raw_transaction(&self, raw_tx: RawTx) {
-		let raw_tx_json = serde_json::json!(raw_tx.0);
-		self.bitcoind_rpc_client
-			.call_method::<Txid>("sendrawtransaction", &[raw_tx_json])
-			.await
-			.unwrap();
-	}
-
-	pub async fn sign_raw_transaction_with_wallet(&self, tx_hex: String) -> SignedTx {
-		let tx_hex_json = serde_json::json!(tx_hex);
-		self.bitcoind_rpc_client
-			.call_method("signrawtransactionwithwallet", &vec![tx_hex_json])
-			.await
-			.unwrap()
-	}
-
 	pub async fn get_new_address(&self) -> Address {
 		let addr_args = vec![serde_json::json!("LDK output address")];
 		let addr = self
@@ -236,15 +186,6 @@ impl BitcoindClient {
 		let address = serde_json::json!(address);
 		self.bitcoind_rpc_client
 			.call_method::<Generated>("generatetoaddress", &vec![blocks, address])
-			.await
-			.unwrap()
-	}
-
-	pub async fn send_to_address(&self, address: String, amount: f64) -> Txid {
-		let address = serde_json::json!(address);
-		let amount = serde_json::json!(amount);
-		self.bitcoind_rpc_client
-			.call_method::<Txid>("sendtoaddress", &vec![address, amount])
 			.await
 			.unwrap()
 	}

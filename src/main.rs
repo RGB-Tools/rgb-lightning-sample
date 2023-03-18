@@ -12,12 +12,10 @@ mod rgb_utils;
 
 use crate::bdk_utils::{broadcast_tx, get_bdk_wallet, get_bdk_wallet_seckey, sync_wallet};
 use crate::bitcoind_client::BitcoindClient;
-use crate::cli::{gen_utxo, mine};
 use crate::disk::FilesystemLogger;
 use crate::proxy::Proxy;
 use crate::rgb_utils::get_rgb_node_client;
 use crate::rgb_utils::{get_asset_owned_values, RgbUtilities};
-use crate::seal::Revealed;
 use amplify::bmap;
 use bdk::bitcoin::OutPoint;
 use bdk::database::SqliteDatabase;
@@ -25,13 +23,14 @@ use bdk::Wallet;
 use bdk::{FeeRate, SignOptions};
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::blockdata::transaction::Transaction;
-use bitcoin::consensus::encode;
+use bitcoin::hashes::hex::FromHex;
+use bitcoin::hashes::Hash;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::util::bip32::{ChildNumber, ExtendedPrivKey};
 use bitcoin::{BlockHash, PackedLockTime, Script, Sequence, TxIn, Witness};
 use bitcoin_bech32::WitnessProgram;
-use bp::seals::txout::{CloseMethod, ExplicitSeal};
+use bp::seals::txout::CloseMethod;
 use lightning::chain;
 use lightning::chain::chaininterface::{ConfirmationTarget, FeeEstimator};
 use lightning::chain::keysinterface::{
@@ -47,7 +46,7 @@ use lightning::ln::channelmanager::{
 use lightning::ln::peer_handler::{IgnoringMessageHandler, MessageHandler, SimpleArcPeerManager};
 use lightning::ln::{PaymentHash, PaymentPreimage, PaymentSecret};
 use lightning::onion_message::SimpleArcOnionMessenger;
-use lightning::rgb_utils::get_rgb_channel_info;
+use lightning::rgb_utils::{get_rgb_channel_info, RgbUtxo, RgbUtxos};
 use lightning::routing::gossip;
 use lightning::routing::gossip::{NodeId, P2PGossipSync};
 use lightning::routing::router::DefaultRouter;
@@ -63,10 +62,10 @@ use lightning_block_sync::UnboundedCache;
 use lightning_invoice::payment;
 use lightning_net_tokio::SocketDescriptor;
 use lightning_persister::FilesystemPersister;
+use lnpbp::chain::{Chain, GENESIS_HASH_REGTEST};
 use psbt::{Psbt, PsbtVersion};
 use rand::{thread_rng, Rng};
 use reqwest::Client as RestClient;
-use rgb::fungible::allocation::AllocatedValue;
 use rgb::Node;
 use rgb::{
 	seal, Assignment, Consignment, EndpointValueMap, PedersenStrategy, SealEndpoint, StateTransfer,
@@ -82,14 +81,18 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use strict_encoding::{StrictDecode, StrictEncode};
 
-const PROXY_URL: &str = "http://127.0.0.1:3000/json-rpc";
+const FEE_RATE: f32 = 1.5;
+const ELECTRUM_URL_REGTEST: &str = "127.0.0.1:50001";
+const ELECTRUM_URL_TESTNET: &str = "ssl://electrum.iriswallet.com:50013";
+const PROXY_URL_REGTEST: &str = "http://127.0.0.1:3000/json-rpc";
+const PROXY_URL_TESTNET: &str = "https://proxy.iriswallet.com/json-rpc";
 const PROXY_TIMEOUT: u8 = 90;
+const UTXO_SIZE_SAT: u64 = 1000;
 
 pub(crate) enum HTLCStatus {
 	Pending,
@@ -156,7 +159,8 @@ async fn handle_ldk_events(
 	network_graph: &NetworkGraph, keys_manager: &KeysManager,
 	inbound_payments: &PaymentInfoStorage, outbound_payments: &PaymentInfoStorage,
 	network: Network, event: &Event, ldk_data_dir: String, rgb_node_client: Arc<Mutex<Client>>,
-	proxy_client: Arc<RestClient>, wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	proxy_client: Arc<RestClient>, proxy_url: &str, wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	electrum_url: String,
 ) {
 	match event {
 		Event::FundingGenerationReady {
@@ -166,8 +170,6 @@ async fn handle_ldk_events(
 			output_script,
 			..
 		} => {
-			// Construct the raw transaction with one output, that is paid the amount of the
-			// channel.
 			let addr = WitnessProgram::from_scriptpubkey(
 				&output_script[..],
 				match network {
@@ -178,10 +180,9 @@ async fn handle_ldk_events(
 				},
 			)
 			.expect("Lightning funding tx should always be to a SegWit output")
-			.to_address();
-			let mut outputs = vec![HashMap::with_capacity(1)];
-			outputs[0].insert(addr, *channel_value_satoshis as f64 / 100_000_000.0);
-			let raw_tx = bitcoind_client.create_raw_transaction(outputs).await;
+			.to_scriptpubkey();
+			let script = Script::from_byte_iter(addr.clone().into_iter().map(|b| Ok(b)))
+				.expect("valid script");
 
 			let (rgb_info, _) =
 				get_rgb_channel_info(temporary_channel_id, &PathBuf::from(&ldk_data_dir.clone()));
@@ -190,6 +191,7 @@ async fn handle_ldk_events(
 				rgb_info.contract_id,
 				rgb_node_client.clone(),
 				wallet_arc.clone(),
+				electrum_url.clone(),
 			)
 			.expect("known contract");
 			let mut rgb_inputs: Vec<OutPoint> = vec![];
@@ -203,85 +205,94 @@ async fn handle_ldk_events(
 				rgb_inputs.push(outpoint);
 				input_amount += owned_value.state.value
 			}
-
-			let wallet = wallet_arc.lock().unwrap();
-
 			let rgb_change_amount = input_amount - channel_rgb_amount;
-			let rgb_change: Vec<AllocatedValue> = if rgb_change_amount > 0 {
-				let rgb_change_outpoint = gen_utxo(&wallet, &bitcoind_client).await;
 
-				vec![AllocatedValue {
-					value: rgb_change_amount,
-					seal: ExplicitSeal::from_str(&format!("opret1st:{rgb_change_outpoint}"))
-						.expect("valid explicit seal"),
-				}]
-			} else {
-				vec![]
-			};
-
-			// Have your wallet put the inputs into the transaction such that the output is
-			// satisfied.
-			let funded_tx = bitcoind_client.fund_raw_transaction(raw_tx).await;
-
-			// Sign the final funding transaction and broadcast it.
-			let signed_tx = bitcoind_client.sign_raw_transaction_with_wallet(funded_tx.hex).await;
-			assert_eq!(signed_tx.complete, true);
-			let final_tx: Transaction =
-				encode::deserialize(&hex_utils::to_vec(&signed_tx.hex).unwrap()).unwrap();
-
+			let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir);
+			let serialized_utxos =
+				fs::read_to_string(&rgb_utxos_path).expect("able to read rgb utxos file");
+			let mut rgb_utxos: RgbUtxos =
+				serde_json::from_str(&serialized_utxos).expect("valid rgb utxos");
+			let unspendable_utxos: Vec<OutPoint> = rgb_utxos
+				.utxos
+				.iter()
+				.filter(|u| !rgb_inputs.contains(&u.outpoint))
+				.map(|u| u.outpoint)
+				.collect();
+			let wallet = wallet_arc.lock().unwrap();
 			let mut builder = wallet.build_tx();
-			let address =
-				wallet.get_address(bdk::wallet::AddressIndex::New).expect("valid address").address;
 			builder
 				.add_utxos(&rgb_inputs)
 				.expect("valid utxos")
-				.fee_rate(FeeRate::from_sat_per_vb(1.5))
-				.manually_selected_only()
-				.drain_to(address.script_pubkey());
+				.unspendable(unspendable_utxos)
+				.fee_rate(FeeRate::from_sat_per_vb(FEE_RATE))
+				.ordering(bdk::wallet::tx_builder::TxOrdering::Untouched)
+				.add_recipient(script, *channel_value_satoshis);
+			let mut beneficiaries: EndpointValueMap = bmap![
+				SealEndpoint::WitnessVout {
+					method: CloseMethod::OpretFirst,
+					vout: 0,
+					blinding: 777,
+				} => channel_rgb_amount
+			];
+			if rgb_change_amount > 0 {
+				beneficiaries.insert(
+					SealEndpoint::WitnessVout {
+						method: CloseMethod::OpretFirst,
+						vout: 1,
+						blinding: 777,
+					},
+					rgb_change_amount,
+				);
+			}
 			let psbt = builder.finish().expect("valid psbt finish").0;
 			let input_outpoints_bt: BTreeSet<OutPoint> = rgb_inputs.clone().into_iter().collect();
-			let funding_txid = final_tx.txid().to_string();
-			let outpoint_str = format!("{funding_txid}:0");
-			let funding_outpoint = OutPoint::from_str(&outpoint_str).expect("valid outpoint");
-			let seal = seal::Revealed {
-				method: CloseMethod::OpretFirst,
-				blinding: 777,
-				txid: Some(funding_outpoint.txid),
-				vout: funding_outpoint.vout,
-			};
-			let concealed_seal = seal.to_concealed_seal();
-			let beneficiaries: EndpointValueMap = bmap![
-				SealEndpoint::ConcealedUtxo(concealed_seal) => channel_rgb_amount
-			];
 			let mut rgb_client = rgb_node_client.lock().unwrap();
 			let (mut psbt, consignment) = rgb_client.send_rgb(
 				rgb_info.contract_id,
 				psbt,
 				input_outpoints_bt,
 				beneficiaries,
-				rgb_change,
+				vec![],
 			);
 
-			let consignment_path = format!("{}/consignment_{funding_txid}", ldk_data_dir.clone());
+			// Sign the final funding transaction
+			wallet.sign(&mut psbt, SignOptions::default()).expect("able to sign");
+			let funding_tx = psbt.extract_tx();
+			let funding_txid = funding_tx.txid();
+
+			let consignment_path = format!("{}/consignment_{funding_txid}", ldk_data_dir);
 			consignment.strict_file_save(consignment_path.clone()).expect("consignment save ok");
 
+			if rgb_change_amount > 0 {
+				let rgb_change_utxo =
+					RgbUtxo { outpoint: OutPoint { txid: funding_txid, vout: 2 }, colored: true };
+				rgb_utxos.utxos.push(rgb_change_utxo);
+				let serialized_utxos = serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
+				fs::write(rgb_utxos_path, serialized_utxos).expect("able to write rgb utxos file");
+
+				let funding_consignment_path =
+					format!("{}/consignment_{}", ldk_data_dir, hex::encode(&temporary_channel_id));
+				consignment
+					.strict_file_save(funding_consignment_path.clone())
+					.expect("consignment save ok");
+			}
+
 			let proxy_ref = (*proxy_client).clone();
-			let res = proxy_ref.post_consignment(PROXY_URL, funding_txid, consignment_path.into());
+			let res = proxy_ref.post_consignment(
+				proxy_url,
+				funding_txid.to_string(),
+				consignment_path.into(),
+			);
 			if res.is_err() || res.unwrap().result.is_none() {
 				println!("ERROR: unable to post consignment");
 				return;
 			}
 
-			wallet.sign(&mut psbt, SignOptions::default()).expect("able to sign");
-			let tx = psbt.extract_tx();
-			broadcast_tx(&tx);
-			sync_wallet(&wallet);
-
 			let reveal = Reveal {
 				blinding_factor: 777,
-				outpoint: funding_outpoint,
+				outpoint: OutPoint { txid: funding_txid, vout: 0 },
 				close_method: CloseMethod::OpretFirst,
-				witness_vout: false,
+				witness_vout: true,
 			};
 			let _status = rgb_client
 				.consume_transfer(consignment, true, Some(reveal), |_| ())
@@ -294,7 +305,7 @@ async fn handle_ldk_events(
 				.funding_transaction_generated(
 					&temporary_channel_id,
 					counterparty_node_id,
-					final_tx,
+					funding_tx,
 				)
 				.is_err()
 			{
@@ -519,9 +530,6 @@ async fn handle_ldk_events(
 				let rgb_change = vec![];
 				let input_outpoints_bt: BTreeSet<OutPoint> =
 					rgb_inputs.clone().into_iter().collect();
-				let final_outpoint = gen_utxo(&wallet, bitcoind_client).await;
-				let seal = Revealed::new(CloseMethod::OpretFirst, final_outpoint);
-				let concealed_seal = seal.to_concealed_seal();
 				let bundle = &consignment
 					.anchored_bundles()
 					.find(|ab| ab.0.txid == outpoint.txid)
@@ -539,7 +547,11 @@ async fn handle_ldk_events(
 					.unwrap();
 				let amt_rgb = assignment.as_revealed_state().unwrap().value;
 				let beneficiaries: EndpointValueMap = bmap![
-					SealEndpoint::ConcealedUtxo(concealed_seal) => amt_rgb
+					SealEndpoint::WitnessVout {
+						method: CloseMethod::OpretFirst,
+						vout: 0,
+						blinding: 777,
+					} => amt_rgb
 				];
 
 				let (tx, consignment) = match outp {
@@ -553,12 +565,12 @@ async fn handle_ldk_events(
 							network,
 							signer.payment_key,
 						);
-						sync_wallet(&intermediate_wallet);
+						sync_wallet(&intermediate_wallet, electrum_url.clone());
 						let mut builder = intermediate_wallet.build_tx();
 						builder
 							.add_utxos(&rgb_inputs)
 							.expect("valid utxos")
-							.fee_rate(FeeRate::from_sat_per_vb(1.5))
+							.fee_rate(FeeRate::from_sat_per_vb(FEE_RATE))
 							.manually_selected_only()
 							.drain_to(address.script_pubkey());
 						let psbt = builder.finish().expect("valid psbt finish").0;
@@ -613,9 +625,10 @@ async fn handle_ldk_events(
 							rgb_change,
 						);
 
+						let mut spend_tx = psbt.to_unsigned_tx();
 						let input_idx = 0;
 						let witness_vec = signer
-							.sign_dynamic_p2wsh_input(&spend_tx, input_idx, &descriptor, &secp_ctx)
+							.sign_dynamic_p2wsh_input(&spend_tx, input_idx, descriptor, &secp_ctx)
 							.expect("possible dynamic sign");
 						spend_tx.input[input_idx].witness = Witness::from_vec(witness_vec);
 
@@ -640,12 +653,12 @@ async fn handle_ldk_events(
 							network,
 							secret.private_key,
 						);
-						sync_wallet(&intermediate_wallet);
+						sync_wallet(&intermediate_wallet, electrum_url.clone());
 						let mut builder = intermediate_wallet.build_tx();
 						builder
 							.add_utxos(&rgb_inputs)
 							.expect("valid utxos")
-							.fee_rate(FeeRate::from_sat_per_vb(1.5))
+							.fee_rate(FeeRate::from_sat_per_vb(FEE_RATE))
 							.manually_selected_only()
 							.drain_to(address.script_pubkey());
 						let psbt = builder.finish().expect("valid psbt finish").0;
@@ -666,15 +679,14 @@ async fn handle_ldk_events(
 					}
 				};
 
-				broadcast_tx(&tx);
-				mine(bitcoind_client, 1).await;
-				sync_wallet(&wallet);
+				broadcast_tx(&tx, electrum_url.clone());
+				sync_wallet(&wallet, electrum_url.clone());
 
 				let reveal = Reveal {
-					blinding_factor: seal.blinding,
-					outpoint: final_outpoint,
+					blinding_factor: 777,
+					outpoint: OutPoint { txid: tx.txid(), vout: 0 },
 					close_method: CloseMethod::OpretFirst,
-					witness_vout: false,
+					witness_vout: true,
 				};
 				let _status = rgb_client
 					.consume_transfer(consignment, true, Some(reveal), |_| ())
@@ -696,6 +708,28 @@ async fn handle_ldk_events(
 				hex_utils::hex_str(channel_id),
 				hex_utils::hex_str(&counterparty_node_id.serialize()),
 			);
+
+			let funding_consignment_path =
+				format!("{}/consignment_{}", ldk_data_dir, hex::encode(&channel_id));
+			if PathBuf::from(&funding_consignment_path).exists() {
+				// there is an RGB change
+				let funding_consignment =
+					StateTransfer::strict_file_load(&funding_consignment_path).expect("ok");
+
+				let funding_txid = funding_consignment.anchored_bundles().last().unwrap().0.txid;
+
+				let reveal = Reveal {
+					blinding_factor: 777,
+					outpoint: OutPoint { txid: funding_txid, vout: 1 },
+					close_method: CloseMethod::OpretFirst,
+					witness_vout: true,
+				};
+				let mut rgb_client = rgb_node_client.lock().unwrap();
+				let _status = rgb_client
+					.consume_transfer(funding_consignment, true, Some(reveal), |_| ())
+					.expect("valid consume tranfer");
+			}
+
 			print!("> ");
 			io::stdout().flush().unwrap();
 		}
@@ -762,8 +796,23 @@ async fn start_ldk() {
 	}
 
 	// RGB setup
-	let rgb_node_client = Arc::new(Mutex::new(get_rgb_node_client(args.rgb_node_port)));
+	let (electrum_url, proxy_url, rgb_network) = match args.network {
+		bitcoin::Network::Testnet => (ELECTRUM_URL_TESTNET, PROXY_URL_TESTNET, Chain::Testnet3),
+		bitcoin::Network::Regtest => (
+			ELECTRUM_URL_REGTEST,
+			PROXY_URL_REGTEST,
+			Chain::Regtest(BlockHash::from_slice(GENESIS_HASH_REGTEST).unwrap()),
+		),
+		_ => {
+			println!("ERROR: PoC does not support selected network");
+			return;
+		}
+	};
+	let rgb_node_client =
+		Arc::new(Mutex::new(get_rgb_node_client(args.rgb_node_port, rgb_network.clone())));
 	fs::write(format!("{ldk_data_dir}/rgb_node_port"), args.rgb_node_port.to_string())
+		.expect("able to write");
+	fs::write(format!("{ldk_data_dir}/rgb_node_network"), rgb_network.to_string())
 		.expect("able to write");
 	let rest_client = RestClient::builder()
 		.timeout(Duration::from_secs(PROXY_TIMEOUT as u64))
@@ -890,6 +939,14 @@ async fn start_ldk() {
 			(polled_best_block_hash, fresh_channel_manager)
 		}
 	};
+
+	// initialize RGB UTXOs file on first run
+	if !restarting_node {
+		let rgb_utxos = RgbUtxos { utxos: vec![] };
+		let rgb_utxos_path = format!("{}/rgb_utxos", ldk_data_dir);
+		let serialized_utxos = serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
+		fs::write(rgb_utxos_path, serialized_utxos).expect("able to write rgb utxos file");
+	}
 
 	// Step 10: Sync ChannelMonitors and ChannelManager to chain tip
 	let mut chain_listener_channel_monitors = Vec::new();
@@ -1044,7 +1101,9 @@ async fn start_ldk() {
 			ldk_data_dir_copy.clone(),
 			rgb_node_client_copy.clone(),
 			proxy_client_copy.clone(),
+			proxy_url,
 			wallet_copy.clone(),
+			electrum_url.to_string(),
 		));
 	};
 
@@ -1161,7 +1220,9 @@ async fn start_ldk() {
 		Arc::clone(&bitcoind_client),
 		Arc::clone(&rgb_node_client),
 		proxy_client.clone(),
+		proxy_url,
 		wallet.clone(),
+		electrum_url.to_string(),
 	)
 	.await;
 
