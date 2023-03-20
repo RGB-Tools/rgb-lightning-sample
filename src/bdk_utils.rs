@@ -1,22 +1,20 @@
-use bdk::blockchain::{ConfigurableBlockchain, ElectrumBlockchain, ElectrumBlockchainConfig};
-use bdk::{Wallet, SyncOptions};
-use bdk::bitcoin::Network;
 use bdk::bitcoin::util::bip32::ExtendedPrivKey;
-use bdk::database::{ConfigurableDatabase, SqliteDatabase};
-use bdk::database::any::SqliteDbConfiguration;
+use bdk::bitcoin::Network;
 use bdk::blockchain::Blockchain;
+use bdk::blockchain::{ConfigurableBlockchain, ElectrumBlockchain, ElectrumBlockchainConfig};
+use bdk::database::any::SqliteDbConfiguration;
+use bdk::database::{ConfigurableDatabase, SqliteDatabase};
 use bdk::template::P2Wpkh;
-use bitcoin::{Transaction, PrivateKey};
+use bdk::{SyncOptions, Wallet};
 use bitcoin::secp256k1::SecretKey;
+use bitcoin::{PrivateKey, Transaction};
 
 const DERIVATION_PATH_ACCOUNT: u32 = 0;
 const BDK_DB_NAME: &str = "bdk_db";
 const ELECTRUM_URL: &str = "127.0.0.1:50001";
 
 pub(crate) fn calculate_descriptor_from_xprv(
-	xprv: ExtendedPrivKey,
-	network: Network,
-	change: bool,
+	xprv: ExtendedPrivKey, network: Network, change: bool,
 ) -> String {
 	let change_num = u8::from(change);
 	let coin_type = i32::from(network != Network::Bitcoin);
@@ -28,41 +26,31 @@ pub(crate) fn calculate_descriptor_from_xprv(
 	format!("wpkh({xprv}{derivation_path})")
 }
 
-pub(crate) fn get_bdk_wallet(ldk_data_dir: String, xprv: ExtendedPrivKey) -> Wallet<SqliteDatabase> {
+pub(crate) fn get_bdk_wallet(
+	ldk_data_dir: String, xprv: ExtendedPrivKey,
+) -> Wallet<SqliteDatabase> {
 	let network = Network::Regtest;
 	let descriptor = calculate_descriptor_from_xprv(xprv, network, false);
-	let change_descriptor =
-		calculate_descriptor_from_xprv(xprv, network, true);
+	let change_descriptor = calculate_descriptor_from_xprv(xprv, network, true);
 
 	let bdk_db = format!("{ldk_data_dir}/{BDK_DB_NAME}");
-	let bdk_config = SqliteDbConfiguration {
-		path: bdk_db,
-	};
+	let bdk_config = SqliteDbConfiguration { path: bdk_db };
 	let bdk_database = SqliteDatabase::from_config(&bdk_config).expect("valid bdk config");
 
-	Wallet::new(
-		&descriptor,
-		Some(&change_descriptor),
-		network,
-		bdk_database,
-	).expect("valid bdk wallet")
+	Wallet::new(&descriptor, Some(&change_descriptor), network, bdk_database)
+		.expect("valid bdk wallet")
 }
 
-pub(crate) fn get_bdk_wallet_seckey(ldk_data_dir: String, network: Network, seckey: SecretKey) -> Wallet<SqliteDatabase> {
+pub(crate) fn get_bdk_wallet_seckey(
+	ldk_data_dir: String, network: Network, seckey: SecretKey,
+) -> Wallet<SqliteDatabase> {
 	std::fs::create_dir_all(&ldk_data_dir).expect("successful dir creation");
 	let bdk_db = format!("{ldk_data_dir}/{BDK_DB_NAME}");
-	let bdk_config = SqliteDbConfiguration {
-		path: bdk_db,
-	};
+	let bdk_config = SqliteDbConfiguration { path: bdk_db };
 	let bdk_database = SqliteDatabase::from_config(&bdk_config).expect("valid bdk config");
 
 	let priv_key = PrivateKey::new(seckey, network);
-	Wallet::new(
-		P2Wpkh(priv_key),
-		None,
-		network,
-		bdk_database,
-	).expect("valid bdk wallet")
+	Wallet::new(P2Wpkh(priv_key), None, network, bdk_database).expect("valid bdk wallet")
 }
 
 pub(crate) fn broadcast_tx(tx: &Transaction) {

@@ -32,7 +32,7 @@ pub(crate) fn parse_startup_args() -> Result<LdkUserInfo, ()> {
 		Err(_) => {
 			println!("ERROR: rgb node port must be a number");
 			return Err(());
-		},
+		}
 	};
 
 	let mut ldk_peer_port_set = true;

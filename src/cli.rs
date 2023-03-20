@@ -3,32 +3,32 @@ use crate::bitcoind_client::BitcoindClient;
 use crate::broadcast_tx;
 use crate::disk;
 use crate::hex_utils;
-use crate::PROXY_URL;
 use crate::proxy::Proxy;
-use crate::rgb_utils::RgbUtilities;
 use crate::rgb_utils::get_asset_owned_values;
 use crate::rgb_utils::get_rgb_total_amount;
+use crate::rgb_utils::RgbUtilities;
+use crate::seal::Revealed;
+use crate::PROXY_URL;
 use crate::{
 	ChannelManager, HTLCStatus, InvoicePayer, MillisatAmount, NetworkGraph, OnionMessenger,
 	PaymentInfo, PaymentInfoStorage, PeerManager,
 };
-use crate::seal::Revealed;
 use amplify::bmap;
-use bdk::bitcoin::OutPoint;
 use bdk::bitcoin::hashes::Hash;
-use bdk::{SignOptions, FeeRate, Wallet};
+use bdk::bitcoin::OutPoint;
 use bdk::database::SqliteDatabase;
+use bdk::{FeeRate, SignOptions, Wallet};
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
 use bp::seals::txout::ExplicitSeal;
-use bp::seals::txout::{CloseMethod, blind::ConcealedSeal};
+use bp::seals::txout::{blind::ConcealedSeal, CloseMethod};
 use invoice::ConsignmentEndpoint;
 use lightning::chain::keysinterface::{KeysInterface, KeysManager, Recipient};
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
-use lightning::rgb_utils::{RgbInfo, get_rgb_channel_info, write_rgb_channel_info};
 use lightning::onion_message::{CustomOnionMessageContents, Destination, OnionMessageContents};
+use lightning::rgb_utils::{get_rgb_channel_info, write_rgb_channel_info, RgbInfo};
 use lightning::routing::gossip::NodeId;
 use lightning::util::config::{ChannelHandshakeConfig, ChannelHandshakeLimits, UserConfig};
 use lightning::util::events::EventHandler;
@@ -36,19 +36,16 @@ use lightning::util::ser::{Writeable, Writer};
 use lightning_invoice::payment::PaymentError;
 use lightning_invoice::{utils, Currency, Invoice};
 use reqwest::Client as RestClient;
+use rgb::fungible::allocation::AllocatedValue;
 use rgb::Contract;
 use rgb::ContractId;
 use rgb::EndpointValueMap;
 use rgb::SealEndpoint;
-use rgb::fungible::allocation::AllocatedValue;
+use rgb::{seal, StateTransfer};
 use rgb_rpc::Client;
 use rgb_rpc::ContractValidity;
 use rgb_rpc::Reveal;
-use rgb::{seal, StateTransfer};
 use serde::{Deserialize, Serialize};
-use stens::AsciiString;
-use strict_encoding::strict_deserialize;
-use strict_encoding::strict_serialize;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
@@ -62,6 +59,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use stens::AsciiString;
+use strict_encoding::strict_deserialize;
+use strict_encoding::strict_serialize;
 use strict_encoding::StrictEncode;
 
 const OPENCHANNEL_MIN_SAT: u64 = 5000;
@@ -161,7 +161,8 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					let name = words.next();
 					let precision = words.next();
 
-					if amount.is_none() || ticker.is_none() || name.is_none() || precision.is_none() {
+					if amount.is_none() || ticker.is_none() || name.is_none() || precision.is_none()
+					{
 						println!("ERROR: issueasset has 2 required arguments: `issueasset amount ticker name precision`");
 						continue;
 					}
@@ -193,7 +194,13 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					let wallet = wallet_arc.lock().unwrap();
 					let outpoint = gen_utxo(&wallet, &bitcoind_client).await;
 
-					let contract_id = rgb_node_client.lock().unwrap().issue_contract(amount.unwrap(), outpoint, ticker.unwrap(), name.unwrap(), precision.unwrap());
+					let contract_id = rgb_node_client.lock().unwrap().issue_contract(
+						amount.unwrap(),
+						outpoint,
+						ticker.unwrap(),
+						name.unwrap(),
+						precision.unwrap(),
+					);
 					println!("Asset ID: {contract_id}");
 				}
 				"assetbalance" => {
@@ -211,7 +218,11 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						continue;
 					}
 
-					let total_rgb_amount = match get_rgb_total_amount(contract_id.unwrap(), rgb_node_client.clone(), wallet_arc.clone()) {
+					let total_rgb_amount = match get_rgb_total_amount(
+						contract_id.unwrap(),
+						rgb_node_client.clone(),
+						wallet_arc.clone(),
+					) {
 						Ok(a) => a,
 						Err(e) => {
 							println!("{e}");
@@ -254,7 +265,11 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						}
 					};
 
-					let total_rgb_amount = match get_rgb_total_amount(contract_id, rgb_node_client.clone(), wallet_arc.clone()) {
+					let total_rgb_amount = match get_rgb_total_amount(
+						contract_id,
+						rgb_node_client.clone(),
+						wallet_arc.clone(),
+					) {
 						Ok(a) => a,
 						Err(e) => {
 							println!("{e}");
@@ -267,22 +282,23 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						continue;
 					}
 
-					let asset_owned_values = get_asset_owned_values(contract_id, rgb_node_client.clone(), wallet_arc.clone())
-						.expect("known contract");
+					let asset_owned_values = get_asset_owned_values(
+						contract_id,
+						rgb_node_client.clone(),
+						wallet_arc.clone(),
+					)
+					.expect("known contract");
 					let mut rgb_inputs: Vec<OutPoint> = vec![];
 					let mut input_amount: u64 = 0;
 					for owned_value in asset_owned_values {
 						if input_amount >= amt_rgb {
 							break;
 						}
-						let outpoint = OutPoint {
-							txid: owned_value.seal.txid,
-							vout: owned_value.seal.vout,
-						};
+						let outpoint =
+							OutPoint { txid: owned_value.seal.txid, vout: owned_value.seal.vout };
 						rgb_inputs.push(outpoint);
 						input_amount += owned_value.state.value
 					}
-
 
 					let wallet = wallet_arc.lock().unwrap();
 
@@ -291,31 +307,31 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						let rgb_change_outpoint = gen_utxo(&wallet, &bitcoind_client).await;
 						vec![AllocatedValue {
 							value: rgb_change_amount,
-							seal: ExplicitSeal::from_str(&format!("opret1st:{rgb_change_outpoint}"))
-								.expect("valid explicit seal"),
+							seal: ExplicitSeal::from_str(&format!(
+								"opret1st:{rgb_change_outpoint}"
+							))
+							.expect("valid explicit seal"),
 						}]
 					} else {
 						vec![]
 					};
 
-					let btc_outpoints = rgb_inputs.iter().map(|o| OutPoint {
-						txid: o.txid,
-						vout: o.vout
-					});
+					let btc_outpoints =
+						rgb_inputs.iter().map(|o| OutPoint { txid: o.txid, vout: o.vout });
 					let inputs: BTreeSet<OutPoint> = FromIterator::from_iter(btc_outpoints);
 
 					let mut builder = wallet.build_tx();
-					let address = wallet.get_address(bdk::wallet::AddressIndex::New).expect("valid address").address;
+					let address = wallet
+						.get_address(bdk::wallet::AddressIndex::New)
+						.expect("valid address")
+						.address;
 					builder
 						.add_utxos(&rgb_inputs)
 						.expect("valid utxos")
 						.fee_rate(FeeRate::from_sat_per_vb(1.5))
 						.manually_selected_only()
 						.drain_to(address.script_pubkey());
-					let psbt = builder
-						.finish()
-						.expect("valid psbt finish")
-						.0;
+					let psbt = builder.finish().expect("valid psbt finish").0;
 
 					let blinded_utxo = blinded_utxo.unwrap();
 					let concealed_seal = ConcealedSeal::from_str(blinded_utxo);
@@ -330,13 +346,20 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 
 					let mut rgb_client = rgb_node_client.lock().unwrap();
 
-					let (mut psbt, consignment) = rgb_client.send_rgb(contract_id, psbt, inputs, beneficiaries, rgb_change);
+					let (mut psbt, consignment) =
+						rgb_client.send_rgb(contract_id, psbt, inputs, beneficiaries, rgb_change);
 
 					let consignment_path = format!("{}/consignment", ldk_data_dir.clone());
-					consignment.strict_file_save(consignment_path.clone()).expect("consignment save ok");
+					consignment
+						.strict_file_save(consignment_path.clone())
+						.expect("consignment save ok");
 
 					let proxy_ref = (*proxy_client).clone();
-					let res = proxy_ref.post_consignment(PROXY_URL, blinded_utxo.to_string(), consignment_path.into());
+					let res = proxy_ref.post_consignment(
+						PROXY_URL,
+						blinded_utxo.to_string(),
+						consignment_path.into(),
+					);
 					if res.is_err() || res.unwrap().result.is_none() {
 						println!("ERROR: unable to post consignment");
 						return;
@@ -363,26 +386,29 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					let concealed_seal = seal.to_concealed_seal();
 					let blinded_utxo = concealed_seal.to_string();
 
-					let blinded_dir = PathBuf::from_str(&ldk_data_dir).expect("valid data dir").join("blinded_utxos");
+					let blinded_dir = PathBuf::from_str(&ldk_data_dir)
+						.expect("valid data dir")
+						.join("blinded_utxos");
 					fs::create_dir_all(blinded_dir.clone()).expect("successful directory creation");
 					let blinded_path = blinded_dir.join(&blinded_utxo);
-					let blinded_info = BlindedInfo {
-						contract_id: None,
-						seal,
-						consumed: false,
-					};
-					let serialized_info = serde_json::to_string(&blinded_info).expect("valid rgb info");
+					let blinded_info = BlindedInfo { contract_id: None, seal, consumed: false };
+					let serialized_info =
+						serde_json::to_string(&blinded_info).expect("valid rgb info");
 					fs::write(blinded_path, serialized_info).expect("successful file write");
 
 					println!("Blinded UTXO: {blinded_utxo}");
 				}
 				"refresh" => {
-					let blinded_dir = PathBuf::from_str(&ldk_data_dir).expect("valid data dir").join("blinded_utxos");
+					let blinded_dir = PathBuf::from_str(&ldk_data_dir)
+						.expect("valid data dir")
+						.join("blinded_utxos");
 					let blinded_files = fs::read_dir(blinded_dir).expect("successfult dir read");
 
 					for bf in blinded_files {
-						let serialized_info = fs::read_to_string(bf.as_ref().unwrap().path()).expect("valid blinded info file");
-						let blinded_info: BlindedInfo = serde_json::from_str(&serialized_info).expect("valid blinded data");
+						let serialized_info = fs::read_to_string(bf.as_ref().unwrap().path())
+							.expect("valid blinded info file");
+						let blinded_info: BlindedInfo =
+							serde_json::from_str(&serialized_info).expect("valid blinded data");
 						if blinded_info.consumed {
 							continue;
 						}
@@ -396,8 +422,10 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 							continue;
 						}
 						let consignment = res.unwrap().result.unwrap();
-						let consignment_bytes = base64::decode(consignment).expect("valid consignment");
-						let consignment: StateTransfer = strict_deserialize(consignment_bytes).expect("valid consignment");
+						let consignment_bytes =
+							base64::decode(consignment).expect("valid consignment");
+						let consignment: StateTransfer =
+							strict_deserialize(consignment_bytes).expect("valid consignment");
 
 						let ser_cons = strict_serialize(&consignment).expect("valid consignment");
 						let contract_consignment: Contract =
@@ -439,7 +467,11 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					let push_value_msat = words.next();
 					let contract_id = words.next();
 					let channel_value_rgb = words.next();
-					if peer_pubkey_and_ip_addr.is_none() || channel_value_sat.is_none() || push_value_msat.is_none() || contract_id.is_none() || channel_value_rgb.is_none() {
+					if peer_pubkey_and_ip_addr.is_none()
+						|| channel_value_sat.is_none()
+						|| push_value_msat.is_none()
+						|| contract_id.is_none() || channel_value_rgb.is_none()
+					{
 						println!("ERROR: openchannel has 5 required arguments: `openchannel pubkey@host:port chan_amt_satoshis push_amt_msatoshis rgb_contract_id chan_amt_rgb` [--public]");
 						continue;
 					}
@@ -460,11 +492,17 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					}
 					let chan_amt_sat = chan_amt_sat.unwrap();
 					if chan_amt_sat < OPENCHANNEL_MIN_SAT {
-						println!("ERROR: channel amount must be equal or higher than {}", OPENCHANNEL_MIN_SAT);
+						println!(
+							"ERROR: channel amount must be equal or higher than {}",
+							OPENCHANNEL_MIN_SAT
+						);
 						continue;
 					}
 					if chan_amt_sat > OPENCHANNEL_MAX_SAT {
-						println!("ERROR: channel amount must be equal or less than {}", OPENCHANNEL_MAX_SAT);
+						println!(
+							"ERROR: channel amount must be equal or less than {}",
+							OPENCHANNEL_MAX_SAT
+						);
 						continue;
 					}
 
@@ -475,7 +513,10 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					}
 					let push_amt_msat = push_amt_msat.unwrap();
 					if push_amt_msat < DUST_LIMIT_MSAT {
-						println!("ERROR: push amount must be equal or higher than the dust limit ({})", DUST_LIMIT_MSAT);
+						println!(
+							"ERROR: push amount must be equal or higher than the dust limit ({})",
+							DUST_LIMIT_MSAT
+						);
 						continue;
 					}
 
@@ -493,7 +534,11 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					}
 					let chan_amt_rgb = chan_amt_rgb.unwrap();
 
-					let total_rgb_amount = match get_rgb_total_amount(contract_id, rgb_node_client.clone(), wallet_arc.clone()) {
+					let total_rgb_amount = match get_rgb_total_amount(
+						contract_id,
+						rgb_node_client.clone(),
+						wallet_arc.clone(),
+					) {
 						Ok(a) => a,
 						Err(e) => {
 							println!("{e}");
@@ -541,10 +586,8 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					);
 
 					let temporary_channel_id = open_channel_result.unwrap();
-					let channel_rgb_info_path = format!("{}/{}",
-						ldk_data_dir.clone(),
-						hex::encode(&temporary_channel_id)
-					);
+					let channel_rgb_info_path =
+						format!("{}/{}", ldk_data_dir.clone(), hex::encode(&temporary_channel_id));
 					let rgb_info = RgbInfo {
 						contract_id,
 						local_rgb_amount: chan_amt_rgb,
@@ -584,13 +627,14 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 							continue;
 						}
 					};
-					let amt_msat_str = match words.next() {
-						Some(amt) => amt,
-						None => {
-							println!("ERROR: keysend requires an amount in millisatoshis: {keysend_cmd}");
-							continue;
-						}
-					};
+					let amt_msat_str =
+						match words.next() {
+							Some(amt) => amt,
+							None => {
+								println!("ERROR: keysend requires an amount in millisatoshis: {keysend_cmd}");
+								continue;
+							}
+						};
 					let amt_msat: u64 = match amt_msat_str.parse() {
 						Ok(amt) => amt,
 						Err(e) => {
@@ -721,7 +765,9 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						println!("SUCCESS: disconnected from peer {}", peer_pubkey);
 					}
 				}
-				"listchannels" => list_channels(&channel_manager, &network_graph, ldk_data_dir.clone()),
+				"listchannels" => {
+					list_channels(&channel_manager, &network_graph, ldk_data_dir.clone())
+				}
 				"listpayments" => {
 					list_payments(inbound_payments.clone(), outbound_payments.clone())
 				}
@@ -936,7 +982,9 @@ fn list_peers(peer_manager: Arc<PeerManager>) {
 	println!("\t}},");
 }
 
-fn list_channels(channel_manager: &Arc<ChannelManager>, network_graph: &Arc<NetworkGraph>, ldk_data_dir: String) {
+fn list_channels(
+	channel_manager: &Arc<ChannelManager>, network_graph: &Arc<NetworkGraph>, ldk_data_dir: String,
+) {
 	print!("[");
 	for chan_info in channel_manager.list_channels() {
 		println!("");
@@ -977,7 +1025,11 @@ fn list_channels(channel_manager: &Arc<ChannelManager>, network_graph: &Arc<Netw
 		let info_file_path = ldk_data_dir_path.join(hex::encode(chan_info.channel_id));
 		let (contract_id, local_rgb_amount, remote_rgb_amount) = if info_file_path.exists() {
 			let (rgb_info, _) = get_rgb_channel_info(&chan_info.channel_id, &ldk_data_dir_path);
-			(rgb_info.contract_id.to_string(), rgb_info.local_rgb_amount.to_string(), rgb_info.remote_rgb_amount.to_string())
+			(
+				rgb_info.contract_id.to_string(),
+				rgb_info.local_rgb_amount.to_string(),
+				rgb_info.remote_rgb_amount.to_string(),
+			)
 		} else {
 			let not_available = "N/A".to_string();
 			(not_available.clone(), not_available.clone(), not_available)
@@ -1096,8 +1148,8 @@ fn do_disconnect_peer(
 }
 
 fn open_channel(
-	peer_pubkey: PublicKey, channel_amt_sat: u64, push_amt_msat: u64,
-	announced_channel: bool, channel_manager: Arc<ChannelManager>,
+	peer_pubkey: PublicKey, channel_amt_sat: u64, push_amt_msat: u64, announced_channel: bool,
+	channel_manager: Arc<ChannelManager>,
 ) -> Result<[u8; 32], ()> {
 	let config = UserConfig {
 		channel_handshake_limits: ChannelHandshakeLimits {
@@ -1113,8 +1165,16 @@ fn open_channel(
 		..Default::default()
 	};
 
-	let consignment_endpoint = ConsignmentEndpoint::from_str(&format!("rgbhttpjsonrpc:{}", PROXY_URL)).unwrap();
-	match channel_manager.create_channel(peer_pubkey, channel_amt_sat, push_amt_msat, 0, Some(config), consignment_endpoint) {
+	let consignment_endpoint =
+		ConsignmentEndpoint::from_str(&format!("rgbhttpjsonrpc:{}", PROXY_URL)).unwrap();
+	match channel_manager.create_channel(
+		peer_pubkey,
+		channel_amt_sat,
+		push_amt_msat,
+		0,
+		Some(config),
+		consignment_endpoint,
+	) {
 		Ok(temporary_channel_id) => {
 			println!("EVENT: initiated channel with peer {}. ", peer_pubkey);
 			return Ok(temporary_channel_id);
@@ -1309,12 +1369,17 @@ pub(crate) fn parse_peer_info(
 	Ok((pubkey.unwrap(), peer_addr.unwrap().unwrap()))
 }
 
-pub(crate) async fn gen_utxo(wallet: &Wallet<SqliteDatabase>, bitcoind_client: &BitcoindClient) -> OutPoint {
-	let address = wallet.get_address(bdk::wallet::AddressIndex::New).expect("valid address").address;
+pub(crate) async fn gen_utxo(
+	wallet: &Wallet<SqliteDatabase>, bitcoind_client: &BitcoindClient,
+) -> OutPoint {
+	let address =
+		wallet.get_address(bdk::wallet::AddressIndex::New).expect("valid address").address;
 	bitcoind_client.send_to_address(address.to_string(), 0.7).await;
 	mine(bitcoind_client, 1).await;
 	sync_wallet(wallet);
-	wallet.list_unspent().expect("valid unspent list")
+	wallet
+		.list_unspent()
+		.expect("valid unspent list")
 		.iter()
 		.find(|u| u.txout.script_pubkey == address.script_pubkey())
 		.expect("to find address unspent")

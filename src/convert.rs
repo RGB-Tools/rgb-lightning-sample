@@ -97,7 +97,8 @@ pub struct Generated(Vec<String>);
 impl TryInto<Generated> for JsonResponse {
 	type Error = std::io::Error;
 	fn try_into(self) -> std::io::Result<Generated> {
-		let generated: Vec<String> = serde_json::from_value(self.0).expect("valid generated response");
+		let generated: Vec<String> =
+			serde_json::from_value(self.0).expect("valid generated response");
 		Ok(Generated(generated))
 	}
 }

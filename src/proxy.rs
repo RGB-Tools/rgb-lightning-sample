@@ -1,10 +1,10 @@
-use amplify::s;
-use reqwest::{multipart, Client, Body};
-use reqwest::header::CONTENT_TYPE;
-use serde::{Deserialize, Serialize};
 use crate::error::Error;
-use tokio_util::codec::{BytesCodec, FramedRead};
+use amplify::s;
+use reqwest::header::CONTENT_TYPE;
+use reqwest::{multipart, Body, Client};
+use serde::{Deserialize, Serialize};
 use tokio::fs::File;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 use std::path::PathBuf;
 
@@ -38,24 +38,16 @@ pub struct BlindedUtxoParam {
 
 pub trait Proxy {
 	fn post_consignment(
-		self,
-		url: &str,
-		blindedutxo: String,
-		consignment_path: PathBuf,
+		self, url: &str, blindedutxo: String, consignment_path: PathBuf,
 	) -> Result<JsonRpcResponse<bool>, Error>;
 	fn get_consignment(
-		self,
-		url: &str,
-		blindedutxo: String,
+		self, url: &str, blindedutxo: String,
 	) -> Result<JsonRpcResponse<String>, reqwest::Error>;
 }
 
 impl Proxy for Client {
 	fn post_consignment(
-		self,
-		url: &str,
-		consignment_id: String,
-		consignment_path: PathBuf,
+		self, url: &str, consignment_id: String, consignment_path: PathBuf,
 	) -> Result<JsonRpcResponse<bool>, Error> {
 		futures::executor::block_on(async {
 			let file = File::open(consignment_path.clone()).await?;
@@ -76,20 +68,12 @@ impl Proxy for Client {
 				.text("id", "1")
 				.text("params", params)
 				.part("file", consignment_file);
-			Ok(self
-				.post(url)
-				.multipart(form)
-				.send()
-				.await?
-				.json::<JsonRpcResponse<bool>>()
-				.await?)
+			Ok(self.post(url).multipart(form).send().await?.json::<JsonRpcResponse<bool>>().await?)
 		})
 	}
 
 	fn get_consignment(
-		self,
-		url: &str,
-		consignment_id: String,
+		self, url: &str, consignment_id: String,
 	) -> Result<JsonRpcResponse<String>, reqwest::Error> {
 		futures::executor::block_on(async {
 			let body = JsonRpcRequest {
@@ -98,8 +82,7 @@ impl Proxy for Client {
 				id: None,
 				params: Some(BlindedUtxoParam { blinded_utxo: consignment_id }),
 			};
-			self
-				.post(url)
+			self.post(url)
 				.header(CONTENT_TYPE, JSON)
 				.json(&body)
 				.send()

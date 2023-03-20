@@ -1,4 +1,6 @@
-use crate::convert::{BlockchainInfo, FeeResponse, FundedTx, NewAddress, RawTx, SignedTx, Generated};
+use crate::convert::{
+	BlockchainInfo, FeeResponse, FundedTx, Generated, NewAddress, RawTx, SignedTx,
+};
 use base64;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::consensus::encode;
