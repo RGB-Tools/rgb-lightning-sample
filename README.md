@@ -10,6 +10,8 @@ experience and security assumptions of regular Bitcoin Lightning Network
 payments. This is achieved by adding to each lightning commitment transaction a
 dedicated extra output containing the anchor to the RGB state transition.
 
+More context on how RGB works on the Lightning Network can be found [here](https://docs.rgb.info/lightning-network-compatibility).
+
 The RGB functionality for now can be tested only in a regtest environment,
 but an advanced user may be able to apply changes in order to use it also on
 other networks. Please be careful, this software is early alpha, we do not take
