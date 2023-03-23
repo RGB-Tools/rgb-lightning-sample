@@ -5,6 +5,12 @@ source tests/common.sh
 
 get_node_ids
 
+# create RGB UTXOs
+create_utxos 1
+create_utxos 2
+create_utxos 3
+
+# issue asset
 issue_asset
 
 # send assets
@@ -53,6 +59,7 @@ forceclose_channel_init 1 "$node2_id"
 mine 144
 _wait_for_text $T_5 node1 "Event::SpendableOutputs complete"
 timestamp
+mine 1
 asset_balance 1
 
 mine 100
@@ -63,4 +70,5 @@ asset_balance 1
 mine 144
 _wait_for_text_multi $T_5 node1 "assetbalance" "Event::SpendableOutputs complete"
 timestamp
+mine 1
 asset_balance 1

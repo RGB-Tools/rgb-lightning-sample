@@ -10,12 +10,14 @@ experience and security assumptions of regular Bitcoin Lightning Network
 payments. This is achieved by adding to each lightning commitment transaction a
 dedicated extra output containing the anchor to the RGB state transition.
 
-More context on how RGB works on the Lightning Network can be found [here](https://docs.rgb.info/lightning-network-compatibility).
+More context on how RGB works on the Lightning Network can be found
+[here](https://docs.rgb.info/lightning-network-compatibility).
 
-The RGB functionality for now can be tested only in a regtest environment,
-but an advanced user may be able to apply changes in order to use it also on
-other networks. Please be careful, this software is early alpha, we do not take
-any responsability for loss of funds or any other issue you may encounter.
+The RGB functionality for now can be tested only in regtest or testnet
+environments, but an advanced user may be able to apply changes in order to use
+it also on other networks.
+Please be careful, this software is early alpha, we do not take any
+responsability for loss of funds or any other issue you may encounter.
 
 Also note that the following RGB projects (included in this project as git
 sumbodules) have been modified in order to make the creation of static
@@ -34,25 +36,21 @@ a compare with `v0.0.113`, the version we applied the changes to.
 
 ## Installation
 
-Clone the project:
+Clone the project, including (shallow) submodules:
 ```sh
-git clone https://github.com/RGB-Tools/ldk-sample
-```
-
-Initialize the git submodules:
-```sh
-git submodule update --init
+git clone https://github.com/RGB-Tools/ldk-sample --recurse-submodules --shallow-submodules
 ```
 
 Build the modified RGB node docker image and the ldk-sample crate:
 ```sh
-docker-compose build
+docker compose build
 cargo build
 ```
 
-## Usage (in regtest environment)
+## Usage in a test environment
 
-A regtest environment has been added for easier testing.
+A test environment has been added for easier testing. It currently supports the
+regtest and testnet networks.
 
 Instructions and commands are meant to be run from the project's root
 directory.
@@ -60,31 +58,34 @@ directory.
 The included `Dockerfile` builds an RGB node image that is required to add RGB
 functionality to [ldk-sample]. Each ldk node requires its dedicated RGB node.
 
-The `docker-compose.yml` file manages:
-- a regtest bitcoind node
+The `docker-compose.yml` file manages 3 RGB nodes and, when using the regtest
+network, it also manages:
+- a bitcoind node
 - an electrs instance
 - an [RGB proxy server] instance
-- 3 RGB nodes
 
-Run this command in order to start with a clean regtest environment:
+Run this command in order to start with a clean test environment (specifying
+the desired network):
 ```sh
-tests/test.sh --start
+tests/test.sh --start --network <network>
 ```
 
 The command will create the directories needed by the services, start the
-docker services and mine some blocks. Command will always start clean, taking
-down previous running services if any.
+docker containers and mine some blocks. The test environment will always start
+in a clean state, taking down previous running services (if any) and
+re-creating data directories.
 
 Once services are running, ldk nodes can be started.
 Each ldk node needs to be started in a separate shell with `cargo run`,
 specifying:
-- bitcoind user, password, host and post
+- bitcoind user, password, host and port
 - ldk data directory
 - rgb-node port
 - ldk peer listening port
 - network
 
-Here's an example of how to start three nodes, each one with its own rgb-node:
+Here's an example of how to start three regtest nodes, each one using its own
+rgb-node and the shared regtest services provided by docker compose:
 ```sh
 # 1st shell
 cargo run user:password@localhost:18443 dataldk0/ 63963 9735 regtest
@@ -94,6 +95,20 @@ cargo run user:password@localhost:18443 dataldk1/ 63964 9736 regtest
 
 # 3rd shell
 cargo run user:password@localhost:18443 dataldk2/ 63965 9737 regtest
+```
+
+Here's an example of how to start three testnet nodes, each one using its own
+rgb-node provided by docker compose and external testnet services:
+
+```sh
+# 1st shell
+cargo run user:password@electrum.iriswallet.com:18332 dataldk0/ 63963 9735 testnet
+
+# 2nd shell
+cargo run user:password@electrum.iriswallet.com:18332 dataldk1/ 63964 9736 testnet
+
+# 3rd shell
+cargo run user:password@electrum.iriswallet.com:18332 dataldk2/ 63965 9737 testnet
 ```
 
 Once ldk nodes are running, they can be operated via their CLI.
@@ -112,8 +127,8 @@ If needed, more nodes can be added. To do so:
   (`dataldk<n>`) nodes
 - add an entry for each additional rgb-node in `docker-compose.yml`, with
   different exposed port and data directory
-- run additional `cargo run`s for ldk nodes, specifying the correct rgb node
-  and peer listening ports
+- run additional `cargo run`s for ldk nodes, specifying the correct bitcoind
+  string, data directory, rgb node port, peer listening port and network
 
 ## On-chain operations
 
@@ -246,10 +261,12 @@ forceclosechannel 83034b8a3302bb9cc63d75ffd49b03e224cb28d4911702827a8dd2553d0f52
 
 ## Scripted tests
 
-A few scenarios can be tested using a scripted sequence.
+A few scenarios can be tested using a scripted sequence. This is only supported
+on regtest as mining needs to be automated as well.
 
 The entrypoint for scripted tests is the shell command `tests/test.sh`,
-which can be called from the project's root directory.
+which can be called from the project's root directory. The default network is
+"regtest" so it is not mandatory to specify it via the `--network` CLI option.
 
 To view the available tests, call it with the `-l` option.
 Example:

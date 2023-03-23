@@ -1,10 +1,8 @@
 #!/use/bin/env bash
 
 
+# BITCOIN_CLI and TMUX_CMD expected to be set in the environment
 DEBUG=${DEBUG:-0}
-TMUX_SOCK="rgb-tmux"
-TMUX_CMD="tmux -L $TMUX_SOCK"
-export TMUX_CMD
 
 T_1=60
 T_2=120
@@ -66,8 +64,7 @@ _wait_for_text() {
     timeout="$1"
     pane="$2"
     pattern="$3"
-    lines="$4"
-    [ -n "$lines" ] || lines=0
+    lines="${4:-0}"
     timeout  --foreground "$timeout" bash <<EOT
     while :; do
         _get_last_text "$pane" "$pattern" | grep -A$lines "$pattern" && break
@@ -83,8 +80,7 @@ _wait_for_text_multi() {
     pane="$2"
     pattern1="$3"
     pattern2="$4"
-    lines="$5"
-    [ -n "$lines" ] || lines=0
+    lines="${5:-0}"
     timeout  --foreground "$timeout" bash <<EOT
     while :; do
         _get_last_text "$pane" "$pattern1" | grep -A$lines "$pattern2" && break
@@ -104,6 +100,41 @@ check() {
     _subtit "checking output from node $num"
 }
 
+get_address() {
+    local num="$1"
+    _subtit "getting an address from node $num"
+    $TMUX_CMD send-keys -t node$num "getaddress" C-m
+    address=$(_wait_for_text 5 node$num "Address:" \
+        | head -1 | grep -Eo '[0-9a-z]{40,48}')
+    _out "address: $address"
+}
+
+fund_address() {
+    local address txid
+    address="$1"
+    _subtit "funding address $address"
+    txid=$($BITCOIN_CLI sendtoaddress "$address" 1)
+    _out "txid: $txid"
+    mine 1
+}
+
+create_utxos() {
+    local num get_funds
+    num="$1"
+    get_funds="${2:-1}"
+    _tit "creating UTXOs on node $num"
+    if [ "$get_funds" != 0 ]; then
+        get_address $num
+        fund_address $address
+    fi
+    _subtit "calling createutxos"
+    $TMUX_CMD send-keys -t node$num "createutxos" C-m
+    timestamp
+    _wait_for_text_multi $T_1 node$num "createutxos" "UTXO creation complete"
+    timestamp
+    mine 1
+}
+
 get_node_ids() {
     _tit "get node IDs"
     node1_id=$(_wait_for_text 1 node1 "Local Node ID is" |awk '{print $NF}')
@@ -116,8 +147,9 @@ get_node_ids() {
 
 mine() {
     local blocks="$1"
-    _subtit "mining $blocks blocks"
+    _subtit "mining $blocks block(s)"
     $TMUX_CMD send-keys -t node1 "mine $blocks" C-m
+    sleep 3
 }
 
 issue_asset() {
@@ -215,8 +247,7 @@ open_channel() {
 list_channels() {
     local node_num chan_num lines text matches
     node_num="$1"
-    chan_num="$2"
-    [ -n "$chan_num" ] || chan_num=1
+    chan_num="${2:-1}"
     lines=$((chan_num*20))
     _subtit "list channels ($chan_num expected) on node $node_num"
     $TMUX_CMD send-keys -t node$node_num "listchannels" C-m
@@ -254,13 +285,14 @@ close_channel() {
     timestamp
 
     mine 6
-    sleep 3
+    check $dst_num
     _wait_for_text_multi $T_5 node$dst_num "EVENT: Channel .* closed" "Event::SpendableOutputs complete"
     timestamp
 
     check $src_num
-    _wait_for_text_multi $T_5 node$src_num "mine" "Event::SpendableOutputs complete"
+    _wait_for_text_multi $T_5 node$src_num "EVENT: Channel .* closed" "Event::SpendableOutputs complete"
     timestamp
+    mine 1
 }
 
 forceclose_channel_init() {
@@ -288,15 +320,15 @@ forceclose_channel() {
     timestamp
 
     mine 6
-    sleep 3
+    check $dst_num
     _wait_for_text $T_5 node$dst_num "Event::SpendableOutputs complete"
     timestamp
 
     mine 144
-    sleep 3
     check $src_num
     _wait_for_text $T_5 node$src_num "Event::SpendableOutputs complete"
     timestamp
+    mine 1
 }
 
 keysend_init() {
