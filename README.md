@@ -1,25 +1,10 @@
-# ldk-sample
-Sample node implementation using LDK.
+# rgb-lightning-sample
 
-## Installation
-```
-git clone https://github.com/lightningdevkit/ldk-sample
-```
-
-## Usage
-```
-cd ldk-sample
-cargo run <bitcoind-rpc-username>:<bitcoind-rpc-password>@<bitcoind-rpc-host>:<bitcoind-rpc-port> <ldk_storage_directory_path> [<ldk-peer-listening-port>] [<bitcoin-network>] [<announced-node-name>] [<announced-listen-addr>]
-```
-`bitcoind`'s RPC username and password likely can be found through `cat ~/.bitcoin/.cookie`.
-
-`bitcoin-network`: defaults to `testnet`. Options: `testnet`, `regtest`, and `signet`.
-
-`ldk-peer-listening-port`: defaults to 9735.
-
-`announced-listen-addr` and `announced-node-name`: default to nothing, disabling any public announcements of this node.
-`announced-listen-addr` can be set to an IPv4 or IPv6 address to announce that as a publicly-connectable address for this node.
-`announced-node-name` can be any string up to 32 bytes in length, representing this node's alias.
+This project is a fork of [ldk-sample] that currently only changes the crate
+name and version in order to reserve the crate name in [crates.io].
+We cannot publish RGB fork now since it depends on some unpublished
+dependencies, but you can still clone and try the project by checking out the
+[rgb-fork branch].
 
 ## License
 
@@ -29,3 +14,7 @@ Licensed under either:
  * MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
+
+[crates.io]: https://crates.io
+[ldk-sample]: https://github.com/lightningdevkit/ldk-sample
+[rgb-fork branch]: https://github.com/RGB-Tools/rgb-lightning-sample/tree/rgb-fork

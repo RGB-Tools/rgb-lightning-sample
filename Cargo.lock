@@ -316,30 +316,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ldk-sample"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bech32 0.8.1",
- "bitcoin",
- "bitcoin-bech32",
- "chrono",
- "futures",
- "hex",
- "libc",
- "lightning",
- "lightning-background-processor",
- "lightning-block-sync",
- "lightning-invoice",
- "lightning-net-tokio",
- "lightning-persister",
- "lightning-rapid-gossip-sync",
- "rand",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.139"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -580,6 +556,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "678054eb77286b51581ba43620cc911abf02758c91f93f479767aed0f90458b2"
 dependencies = [
  "rand_core 0.3.1",
+]
+
+[[package]]
+name = "rgb-lightning-sample"
+version = "0.0.1"
+dependencies = [
+ "base64",
+ "bech32 0.8.1",
+ "bitcoin",
+ "bitcoin-bech32",
+ "chrono",
+ "futures",
+ "hex",
+ "libc",
+ "lightning",
+ "lightning-background-processor",
+ "lightning-block-sync",
+ "lightning-invoice",
+ "lightning-net-tokio",
+ "lightning-persister",
+ "lightning-rapid-gossip-sync",
+ "rand",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

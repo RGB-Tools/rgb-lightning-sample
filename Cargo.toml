@@ -1,8 +1,9 @@
 [package]
-name = "ldk-sample"
-version = "0.1.0"
+name = "rgb-lightning-sample"
+version = "0.0.1"
 authors = ["Valentine Wallace <vwallace@protonmail.com>"]
 license = "MIT OR Apache-2.0"
+description = "RGB fork of ldk-sample"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
