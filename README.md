@@ -38,7 +38,7 @@ a compare with `v0.0.114`, the version we applied the changes to.
 
 Clone the project, including (shallow) submodules:
 ```sh
-git clone https://github.com/RGB-Tools/ldk-sample --recurse-submodules --shallow-submodules
+git clone https://github.com/RGB-Tools/rgb-lightning-sample --recurse-submodules --shallow-submodules
 ```
 
 Build the modified RGB node docker image and the ldk-sample crate:
