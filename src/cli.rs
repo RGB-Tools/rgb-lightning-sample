@@ -77,6 +77,8 @@ const DUST_LIMIT_MSAT: u64 = 546000;
 
 const HTLC_MIN_MSAT: u64 = 3000000;
 
+const INVOICE_MIN_MSAT: u64 = HTLC_MIN_MSAT;
+
 #[derive(Serialize, Deserialize)]
 struct BlindedInfo {
 	contract_id: Option<ContractId>,
@@ -255,7 +257,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 
 					if amount.is_none() || ticker.is_none() || name.is_none() || precision.is_none()
 					{
-						println!("ERROR: issueasset has 2 required arguments: `issueasset amount ticker name precision`");
+						println!("ERROR: issueasset has 4 required arguments: `issueasset <amount> <ticker> <name> <precision>`");
 						continue;
 					}
 
@@ -364,14 +366,7 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					}
 					let contract_id = contract_id.unwrap();
 
-					let amt_rgb_str = match amt_rgb_str {
-						Some(amt) => amt,
-						None => {
-							println!("ERROR: sendasset requires an RGB amount: {sendasset_cmd}");
-							continue;
-						}
-					};
-					let amt_rgb: u64 = match amt_rgb_str.parse() {
+					let amt_rgb: u64 = match amt_rgb_str.unwrap().parse() {
 						Ok(amt) => amt,
 						Err(e) => {
 							println!("ERROR: couldn't parse amt_rgb: {e}");
@@ -770,6 +765,16 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						}
 					};
 
+					if let Some(amt_msat) = invoice.amount_milli_satoshis() {
+						if amt_msat < INVOICE_MIN_MSAT {
+							println!("ERROR: msat amount in invoice cannot be less than {INVOICE_MIN_MSAT}");
+							continue;
+						}
+					} else {
+						println!("ERROR: msat amount missing in invoice");
+						continue;
+					}
+
 					send_payment(&*invoice_payer, &invoice, outbound_payments.clone());
 				}
 				"keysend" => {
@@ -844,9 +849,19 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 					);
 				}
 				"getinvoice" => {
+					let getinvoice_cmd =
+						"`getinvoice <amt_msats> <expiry_secs> <rgb_contract_id> <amt_rgb>`";
 					let amt_str = words.next();
-					if amt_str.is_none() {
-						println!("ERROR: getinvoice requires an amount in millisatoshis");
+					let expiry_secs_str = words.next();
+					let contract_id_str = words.next();
+					let amt_rgb_str = words.next();
+
+					if amt_str.is_none()
+						|| expiry_secs_str.is_none()
+						|| contract_id_str.is_none()
+						|| amt_rgb_str.is_none()
+					{
+						println!("ERROR: getinvoice has 4 required arguments: {getinvoice_cmd}");
 						continue;
 					}
 
@@ -855,10 +870,9 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						println!("ERROR: getinvoice provided payment amount was not a number");
 						continue;
 					}
-
-					let expiry_secs_str = words.next();
-					if expiry_secs_str.is_none() {
-						println!("ERROR: getinvoice requires an expiry in seconds");
+					let amt_msat = amt_msat.unwrap();
+					if amt_msat < INVOICE_MIN_MSAT {
+						println!("ERROR: amt_msat cannot be less than {INVOICE_MIN_MSAT}");
 						continue;
 					}
 
@@ -868,14 +882,33 @@ pub(crate) async fn poll_for_user_input<E: EventHandler>(
 						continue;
 					}
 
+					let contract_id_str = contract_id_str.unwrap();
+					let contract_id = match ContractId::from_str(contract_id_str) {
+						Ok(cid) => cid,
+						Err(_) => {
+							println!("ERROR: invalid contract ID: {contract_id_str}");
+							continue;
+						}
+					};
+
+					let amt_rgb: u64 = match amt_rgb_str.unwrap().parse() {
+						Ok(amt) => amt,
+						Err(e) => {
+							println!("ERROR: couldn't parse amt_rgb: {e}");
+							continue;
+						}
+					};
+
 					get_invoice(
-						amt_msat.unwrap(),
+						amt_msat,
 						Arc::clone(&inbound_payments),
 						&*channel_manager,
 						Arc::clone(&keys_manager),
 						network,
 						expiry_secs.unwrap(),
 						Arc::clone(&logger),
+						contract_id,
+						amt_rgb,
 					);
 				}
 				"connectpeer" => {
@@ -1107,7 +1140,7 @@ fn help() {
 	println!("      keysend <dest_pubkey> <amt_msats> <rgb_contract_id> <amt_rgb>");
 	println!("      listpayments");
 	println!("\n  Invoices:");
-	println!("      getinvoice <amt_msats> <expiry_secs>");
+	println!("      getinvoice <amt_msats> <expiry_secs> <rgb_contract_id> <amt_rgb>");
 	println!("\n  Onchain:");
 	println!("      getaddress");
 	println!("      listunspent");
@@ -1443,7 +1476,7 @@ fn keysend<E: EventHandler, K: KeysInterface>(
 fn get_invoice(
 	amt_msat: u64, payment_storage: PaymentInfoStorage, channel_manager: &ChannelManager,
 	keys_manager: Arc<KeysManager>, network: Network, expiry_secs: u32,
-	logger: Arc<disk::FilesystemLogger>,
+	logger: Arc<disk::FilesystemLogger>, contract_id: ContractId, amt_rgb: u64,
 ) {
 	let mut payments = payment_storage.lock().unwrap();
 	let currency = match network {
@@ -1460,6 +1493,8 @@ fn get_invoice(
 		Some(amt_msat),
 		"ldk-tutorial-node".to_string(),
 		expiry_secs,
+		Some(contract_id),
+		Some(amt_rgb),
 	) {
 		Ok(inv) => {
 			println!("SUCCESS: generated invoice: {}", inv);
