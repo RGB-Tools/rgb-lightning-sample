@@ -197,7 +197,7 @@ refresh() {
     $TMUX_CMD send-keys -t node$num "refresh" C-m
     timestamp
     check $num
-    _wait_for_text $T_1 node$num "Refresh complete"
+    _wait_for_text $T_5 node$num "Refresh complete"
     timestamp
     sleep 1
 }
@@ -362,7 +362,51 @@ keysend() {
 
     check $dst_num
     _wait_for_text $T_5 node$dst_num "EVENT: received payment"
+    timestamp
     _wait_for_text $T_5 node$dst_num "Event::PaymentClaimed end"
+    timestamp
+    _wait_for_text_multi $T_5 node$dst_num "Event::PaymentClaimed end" "HANDLED COMMITMENT SIGNED"
+    timestamp
+}
+
+get_invoice() {
+    local num rgb_amt text pattern
+    num="$1"
+    rgb_amt="$2"
+
+    _tit "get invoice for $rgb_amt assets from node $num"
+    $TMUX_CMD send-keys -t node$num "getinvoice 3000000 900 $asset_id $rgb_amt" C-m
+    timestamp
+    check $num
+    pattern="SUCCESS: generated invoice: "
+    text="$(_wait_for_text_multi $T_5 node$num \
+        'getinvoice' "$pattern" 3 \
+        | sed "s/$pattern//" |grep -Eo '^[0-9a-z]+$')"
+    timestamp
+    invoice="$(echo $text | sed -E 's/[\n ]//g')"
+    _out "invoice: $invoice"
+}
+
+send_payment() {
+    local src_num dst_num invoice
+    src_num="$1"
+    dst_num="$2"
+    invoice="$3"
+
+    _tit "pay invoice from node $src_num"
+    $TMUX_CMD send-keys -t node$src_num "sendpayment $invoice" C-m
+    timestamp
+    check $src_num
+    _wait_for_text_multi $T_5 node$src_num "sendpayment" "EVENT: initiated sending"
+    timestamp
+    _wait_for_text_multi $T_15 node$src_num "sendpayment" "EVENT: successfully sent payment"
+    timestamp
+
+    check $dst_num
+    _wait_for_text $T_5 node$dst_num "EVENT: received payment"
+    timestamp
+    _wait_for_text $T_5 node$dst_num "Event::PaymentClaimed end"
+    timestamp
     _wait_for_text_multi $T_5 node$dst_num "Event::PaymentClaimed end" "HANDLED COMMITMENT SIGNED"
     timestamp
 }
