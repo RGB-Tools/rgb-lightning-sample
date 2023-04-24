@@ -1156,6 +1156,7 @@ fn help() {
 	println!("      assetbalance <contract_id>");
 	println!("      sendasset <rgb_contract_id> <amt_rgb>");
 	println!("      receiveasset");
+	println!("      refresh");
 	println!("\n  Other:");
 	println!("      mine <num_blocks>");
 	println!("      signmessage <message>");
