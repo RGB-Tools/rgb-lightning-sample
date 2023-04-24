@@ -543,7 +543,6 @@ pub(crate) async fn poll_for_user_input(
 					let blinded_dir = PathBuf::from_str(&ldk_data_dir)
 						.expect("valid data dir")
 						.join("blinded_utxos");
-					fs::create_dir_all(blinded_dir.clone()).expect("successful directory creation");
 					let blinded_path = blinded_dir.join(&blinded_utxo);
 					let blinded_info = BlindedInfo { contract_id: None, seal, consumed: false };
 					let serialized_info =

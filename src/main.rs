@@ -750,6 +750,9 @@ async fn start_ldk() {
 	let ldk_data_dir_path = PathBuf::from(&ldk_data_dir);
 	fs::create_dir_all(ldk_data_dir.clone()).unwrap();
 
+	let blinded_dir = ldk_data_dir_path.join("blinded_utxos");
+	fs::create_dir_all(blinded_dir).expect("successful directory creation");
+
 	// ## Setup
 	// Step 1: Initialize the Logger
 	let logger = Arc::new(FilesystemLogger::new(ldk_data_dir.clone()));
