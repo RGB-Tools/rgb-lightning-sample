@@ -879,8 +879,11 @@ async fn start_ldk() {
 		cur.subsec_nanos(),
 		ldk_data_dir_path.clone(),
 	));
-	let wallet =
-		Arc::new(Mutex::new(get_bdk_wallet(ldk_data_dir.clone(), keys_manager.master_key)));
+	let wallet = Arc::new(Mutex::new(get_bdk_wallet(
+		ldk_data_dir.clone(),
+		keys_manager.master_key,
+		args.network,
+	)));
 
 	// Step 7: Read ChannelMonitor state from disk
 	let mut channelmonitors =

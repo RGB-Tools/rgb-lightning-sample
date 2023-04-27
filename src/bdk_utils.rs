@@ -26,9 +26,8 @@ pub(crate) fn calculate_descriptor_from_xprv(
 }
 
 pub(crate) fn get_bdk_wallet(
-	ldk_data_dir: String, xprv: ExtendedPrivKey,
+	ldk_data_dir: String, xprv: ExtendedPrivKey, network: Network,
 ) -> Wallet<SqliteDatabase> {
-	let network = Network::Regtest;
 	let descriptor = calculate_descriptor_from_xprv(xprv, network, false);
 	let change_descriptor = calculate_descriptor_from_xprv(xprv, network, true);
 
