@@ -970,6 +970,24 @@ pub(crate) async fn poll_for_user_input(
 				"listpayments" => {
 					list_payments(inbound_payments.clone(), outbound_payments.clone())
 				}
+				"invoicestatus" => {
+					let maybe_invoice = words.next();
+					if maybe_invoice.is_none() {
+						println!(
+							"ERROR: invoicestatus requires an invoice: `invoicestatus <invoice>`"
+						);
+						continue;
+					};
+					let invoice = match Invoice::from_str(maybe_invoice.unwrap()) {
+						Err(e) => {
+							println!("ERROR: Invalid invoice {}", e);
+							continue;
+						}
+						Ok(v) => v,
+					};
+
+					invoice_status(inbound_payments.clone(), invoice)
+				}
 				"closechannel" => {
 					let channel_id_str = words.next();
 					if channel_id_str.is_none() {
@@ -1147,6 +1165,7 @@ fn help() {
 	println!("      listpayments");
 	println!("\n  Invoices:");
 	println!("      getinvoice <amt_msats> <expiry_secs> <rgb_contract_id> <amt_rgb>");
+	println!("      invoicestatus <invoice>");
 	println!("\n  Onchain:");
 	println!("      getaddress");
 	println!("      listunspent");
@@ -1244,6 +1263,24 @@ fn list_channels(
 		println!("\t}},");
 	}
 	println!("]");
+}
+
+fn invoice_status(inbound_payments: PaymentInfoStorage, invoice: Invoice) {
+	if invoice.is_expired() {
+		println!("expired");
+		return;
+	}
+	let inbound = inbound_payments.lock().unwrap();
+
+	let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
+	inbound.get(&payment_hash).map(|v| {
+		let status_str = match v.status {
+			HTLCStatus::Pending => "pending",
+			HTLCStatus::Succeeded => "succeeded",
+			HTLCStatus::Failed => "failed",
+		};
+		println!("{}", status_str);
+	});
 }
 
 fn list_payments(inbound_payments: PaymentInfoStorage, outbound_payments: PaymentInfoStorage) {
