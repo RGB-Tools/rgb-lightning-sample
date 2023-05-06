@@ -605,7 +605,7 @@ async fn handle_ldk_events(
 
 						let mut psbt = Psbt::with(spend_tx.clone(), PsbtVersion::V0)
 							.expect("valid transaction");
-						let (_psbt, consignment) = rgb_client.send_rgb_internal(
+						let (psbt, consignment) = rgb_client.send_rgb_internal(
 							contract_id,
 							&mut psbt,
 							input_outpoints_bt,
@@ -613,7 +613,7 @@ async fn handle_ldk_events(
 							rgb_change,
 						);
 
-						let mut spend_tx = psbt.to_unsigned_tx();
+						let mut spend_tx = psbt.extract_tx();
 						let input_idx = 0;
 						let witness_vec = signer
 							.sign_dynamic_p2wsh_input(&spend_tx, input_idx, descriptor, &secp_ctx)
