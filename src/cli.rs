@@ -1266,16 +1266,13 @@ fn list_channels(
 }
 
 fn invoice_status(inbound_payments: PaymentInfoStorage, invoice: Invoice) {
-	if invoice.is_expired() {
-		println!("expired");
-		return;
-	}
 	let inbound = inbound_payments.lock().unwrap();
 
 	let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
 	match inbound.get(&payment_hash) {
 		Some(v) => {
 			let status_str = match v.status {
+				HTLCStatus::Pending if invoice.is_expired() => "expired",
 				HTLCStatus::Pending => "pending",
 				HTLCStatus::Succeeded => "succeeded",
 				HTLCStatus::Failed => "failed",
