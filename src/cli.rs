@@ -4,7 +4,7 @@ use crate::broadcast_tx;
 use crate::disk;
 use crate::error::Error;
 use crate::hex_utils;
-use crate::proxy::Proxy;
+use crate::proxy::{get_consignment, post_consignment};
 use crate::rgb_utils::get_asset_owned_values;
 use crate::rgb_utils::get_rgb_total_amount;
 use crate::rgb_utils::RgbUtilities;
@@ -26,7 +26,7 @@ use bp::seals::txout::ExplicitSeal;
 use bp::seals::txout::{blind::ConcealedSeal, CloseMethod};
 use invoice::ConsignmentEndpoint;
 use lightning::chain::keysinterface::{EntropySource, KeysManager};
-use lightning::ln::channelmanager::{PaymentId, Retry};
+use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry};
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::onion_message::{CustomOnionMessageContents, Destination, OnionMessageContents};
@@ -489,11 +489,13 @@ pub(crate) async fn poll_for_user_input(
 						.expect("consignment save ok");
 
 					let proxy_ref = (*proxy_client).clone();
-					let res = proxy_ref.post_consignment(
+					let res = post_consignment(
+						proxy_ref,
 						proxy_url,
 						blinded_utxo.to_string(),
 						consignment_path.into(),
-					);
+					)
+					.await;
 					if res.is_err() || res.unwrap().result.is_none() {
 						println!("ERROR: unable to post consignment");
 						continue;
@@ -569,7 +571,7 @@ pub(crate) async fn poll_for_user_input(
 						let blinded_utxo = blinded_info.seal.to_concealed_seal().to_string();
 
 						let proxy_ref = (*proxy_client).clone();
-						let res = proxy_ref.get_consignment(proxy_url, blinded_utxo);
+						let res = get_consignment(proxy_ref, proxy_url, blinded_utxo).await;
 						if res.is_err() || res.as_ref().unwrap().result.is_none() {
 							println!("WARNING: unable to get consignment");
 							continue;
@@ -1350,16 +1352,12 @@ pub(crate) async fn do_connect_peer(
 		Some(connection_closed_future) => {
 			let mut connection_closed_future = Box::pin(connection_closed_future);
 			loop {
-				match futures::poll!(&mut connection_closed_future) {
-					std::task::Poll::Ready(_) => {
-						return Err(());
-					}
-					std::task::Poll::Pending => {}
-				}
-				// Avoid blocking the tokio context by sleeping a bit
-				match peer_manager.get_peer_node_ids().iter().find(|(id, _)| *id == pubkey) {
-					Some(_) => return Ok(()),
-					None => tokio::time::sleep(Duration::from_millis(10)).await,
+				tokio::select! {
+					_ = &mut connection_closed_future => return Err(()),
+					_ = tokio::time::sleep(Duration::from_millis(10)) => {},
+				};
+				if peer_manager.get_peer_node_ids().iter().find(|(id, _)| *id == pubkey).is_some() {
+					return Ok(());
 				}
 			}
 		}
@@ -1484,6 +1482,7 @@ fn keysend<E: EntropySource>(
 	};
 	let status = match channel_manager.send_spontaneous_payment_with_retry(
 		Some(payment_preimage),
+		RecipientOnionFields::spontaneous_empty(),
 		PaymentId(payment_hash.0),
 		route_params,
 		Retry::Timeout(Duration::from_secs(10)),

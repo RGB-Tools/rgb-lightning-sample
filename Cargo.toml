@@ -8,13 +8,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lightning = { version = "0.0.114", features = ["max_level_trace"], path = "./rust-lightning/lightning" }
-lightning-block-sync = { version = "0.0.114", features = [ "rpc-client" ] }
-lightning-invoice = { version = "0.22", path = "./rust-lightning/lightning-invoice" }
-lightning-net-tokio = { version = "0.0.114" }
-lightning-persister = { version = "0.0.114", path = "./rust-lightning/lightning-persister" }
-lightning-background-processor = { version = "0.0.114" }
-lightning-rapid-gossip-sync = { version = "0.0.114" }
+lightning = { version = "0.0.115", features = ["max_level_trace"], path = "./rust-lightning/lightning" }
+lightning-block-sync = { version = "0.0.115", features = [ "rpc-client" ] }
+lightning-invoice = { version = "0.23", path = "./rust-lightning/lightning-invoice" }
+lightning-net-tokio = { version = "0.0.115" }
+lightning-persister = { version = "0.0.115", path = "./rust-lightning/lightning-persister" }
+lightning-background-processor = { version = "0.0.115", features = [ "futures" ] }
+lightning-rapid-gossip-sync = { version = "0.0.115" }
 
 base64 = "0.13.0"
 bitcoin = "0.29.2"
@@ -23,7 +23,6 @@ bech32 = "0.8"
 hex = "0.3"
 libc = "0.2"
 
-futures = "0.3"
 chrono = "0.4"
 rand = "0.4"
 serde_json = { version = "1.0" }
@@ -34,6 +33,7 @@ amplify = "3.13.0"
 amplify_num = "0.4.1"
 bdk = { version = "0.27", features = ["electrum", "keys-bip39", "sqlite-bundled"] }
 bp-core = { version = "0.9.0", features = ["psbt", "wallet"], path = "./bp-core" }
+futures = "0.3"
 internet2 = "0.9.0"
 lnpbp = "0.9.0"
 lnpbp-invoice = { version = "0.9.0", features = ["rgb"] }

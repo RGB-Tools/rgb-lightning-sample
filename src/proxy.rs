@@ -35,60 +35,44 @@ pub struct JsonRpcResponse<R> {
 pub struct BlindedUtxoParam {
 	blinded_utxo: String,
 }
+pub async fn post_consignment(
+	proxy_client: Client, url: &str, consignment_id: String, consignment_path: PathBuf,
+) -> Result<JsonRpcResponse<bool>, Error> {
+	let file = File::open(consignment_path.clone()).await?;
+	let stream = FramedRead::new(file, BytesCodec::new());
+	let file_name = consignment_path
+		.clone()
+		.file_name()
+		.map(|filename| filename.to_string_lossy().into_owned())
+		.expect("valid file name");
+	let consignment_file = multipart::Part::stream(Body::wrap_stream(stream)).file_name(file_name);
 
-pub trait Proxy {
-	fn post_consignment(
-		self, url: &str, blindedutxo: String, consignment_path: PathBuf,
-	) -> Result<JsonRpcResponse<bool>, Error>;
-	fn get_consignment(
-		self, url: &str, blindedutxo: String,
-	) -> Result<JsonRpcResponse<String>, reqwest::Error>;
+	let params = serde_json::to_string(&BlindedUtxoParam { blinded_utxo: consignment_id })
+		.expect("valid param");
+	let form = multipart::Form::new()
+		.text("method", "consignment.post")
+		.text("jsonrpc", "2.0")
+		.text("id", "1")
+		.text("params", params)
+		.part("file", consignment_file);
+	Ok(proxy_client.post(url).multipart(form).send().await?.json::<JsonRpcResponse<bool>>().await?)
 }
 
-impl Proxy for Client {
-	fn post_consignment(
-		self, url: &str, consignment_id: String, consignment_path: PathBuf,
-	) -> Result<JsonRpcResponse<bool>, Error> {
-		futures::executor::block_on(async {
-			let file = File::open(consignment_path.clone()).await?;
-			let stream = FramedRead::new(file, BytesCodec::new());
-			let file_name = consignment_path
-				.clone()
-				.file_name()
-				.map(|filename| filename.to_string_lossy().into_owned())
-				.expect("valid file name");
-			let consignment_file =
-				multipart::Part::stream(Body::wrap_stream(stream)).file_name(file_name);
-
-			let params = serde_json::to_string(&BlindedUtxoParam { blinded_utxo: consignment_id })
-				.expect("valid param");
-			let form = multipart::Form::new()
-				.text("method", "consignment.post")
-				.text("jsonrpc", "2.0")
-				.text("id", "1")
-				.text("params", params)
-				.part("file", consignment_file);
-			Ok(self.post(url).multipart(form).send().await?.json::<JsonRpcResponse<bool>>().await?)
-		})
-	}
-
-	fn get_consignment(
-		self, url: &str, consignment_id: String,
-	) -> Result<JsonRpcResponse<String>, reqwest::Error> {
-		futures::executor::block_on(async {
-			let body = JsonRpcRequest {
-				method: s!("consignment.get"),
-				jsonrpc: s!("2.0"),
-				id: None,
-				params: Some(BlindedUtxoParam { blinded_utxo: consignment_id }),
-			};
-			self.post(url)
-				.header(CONTENT_TYPE, JSON)
-				.json(&body)
-				.send()
-				.await?
-				.json::<JsonRpcResponse<String>>()
-				.await
-		})
-	}
+pub async fn get_consignment(
+	proxy_client: Client, url: &str, consignment_id: String,
+) -> Result<JsonRpcResponse<String>, reqwest::Error> {
+	let body = JsonRpcRequest {
+		method: s!("consignment.get"),
+		jsonrpc: s!("2.0"),
+		id: None,
+		params: Some(BlindedUtxoParam { blinded_utxo: consignment_id }),
+	};
+	proxy_client
+		.post(url)
+		.header(CONTENT_TYPE, JSON)
+		.json(&body)
+		.send()
+		.await?
+		.json::<JsonRpcResponse<String>>()
+		.await
 }
