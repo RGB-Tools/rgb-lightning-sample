@@ -31,8 +31,8 @@ changes:
 
 But most importantly [rust-lightning] has been changed in order to support
 RGB channels,
-[here](https://github.com/RGB-Tools/rust-lightning/compare/v0.0.114...rgb)
-a compare with `v0.0.114`, the version we applied the changes to.
+[here](https://github.com/RGB-Tools/rust-lightning/compare/v0.0.115...rgb)
+a compare with `v0.0.115`, the version we applied the changes to.
 
 ## Installation
 
