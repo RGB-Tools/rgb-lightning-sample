@@ -3,7 +3,7 @@ version: '3.8'
 services:
   rgb-node0:
     container_name: rgb-node0
-    image: rgb-node:0.9-network
+    image: rgbtools/rgb-node:0.9-ln
     build: .
     environment:
       MYUID: 1000
@@ -19,7 +19,7 @@ services:
     working_dir: /var/lib/rgb
   rgb-node1:
     container_name: rgb-node1
-    image: rgb-node:0.9-network
+    image: rgbtools/rgb-node:0.9-ln
     build: .
     environment:
       MYUID: 1000
@@ -35,7 +35,7 @@ services:
     working_dir: /var/lib/rgb
   rgb-node2:
     container_name: rgb-node2
-    image: rgb-node:0.9-network
+    image: rgbtools/rgb-node:0.9-ln
     build: .
     environment:
       MYUID: 1000

@@ -41,10 +41,18 @@ Clone the project, including (shallow) submodules:
 git clone https://github.com/RGB-Tools/rgb-lightning-sample --recurse-submodules --shallow-submodules
 ```
 
-Build the modified RGB node docker image and the ldk-sample crate:
+Build the ldk-sample crate:
+```sh
+cargo build
+```
+
+Pull the modified RGB node docker image:
+```sh
+docker compose pull
+```
+or build it locally:
 ```sh
 docker compose build
-cargo build
 ```
 
 ## Usage in a test environment
