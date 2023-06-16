@@ -8,28 +8,30 @@ use crate::proxy::{get_consignment, post_consignment};
 use crate::rgb_utils::get_asset_owned_values;
 use crate::rgb_utils::get_rgb_total_amount;
 use crate::rgb_utils::RgbUtilities;
-use crate::seal::Revealed;
 use crate::{
 	ChannelManager, HTLCStatus, MillisatAmount, NetworkGraph, OnionMessenger, PaymentInfo,
 	PaymentInfoStorage, PeerManager,
 };
 use crate::{FEE_RATE, UTXO_SIZE_SAT};
-use amplify::bmap;
+
+use amplify::none;
 use bdk::bitcoin::hashes::Hash;
 use bdk::bitcoin::OutPoint;
+use bdk::bitcoin::Txid;
 use bdk::database::SqliteDatabase;
 use bdk::{FeeRate, SignOptions, Wallet};
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::network::constants::Network;
 use bitcoin::secp256k1::PublicKey;
+use bp::seals::txout::CloseMethod;
 use bp::seals::txout::ExplicitSeal;
-use bp::seals::txout::{blind::ConcealedSeal, CloseMethod};
-use invoice::ConsignmentEndpoint;
 use lightning::chain::keysinterface::{EntropySource, KeysManager};
 use lightning::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry};
 use lightning::ln::msgs::NetAddress;
 use lightning::ln::{PaymentHash, PaymentPreimage};
 use lightning::onion_message::{CustomOnionMessageContents, Destination, OnionMessageContents};
+use lightning::rgb_utils::drop_rgb_runtime;
+use lightning::rgb_utils::get_rgb_runtime;
 use lightning::rgb_utils::write_rgb_payment_info_file;
 use lightning::rgb_utils::{
 	get_rgb_channel_info, write_rgb_channel_info, RgbInfo, RgbUtxo, RgbUtxos,
@@ -41,22 +43,25 @@ use lightning::util::ser::{Writeable, Writer};
 use lightning_invoice::payment::pay_invoice;
 use lightning_invoice::{utils, Currency, Invoice};
 use reqwest::Client as RestClient;
-use rgb::fungible::allocation::AllocatedValue;
-use rgb::Contract;
-use rgb::ContractId;
-use rgb::EndpointValueMap;
-use rgb::SealEndpoint;
-use rgb::{seal, StateTransfer};
-use rgb_rpc::Client;
-use rgb_rpc::ContractValidity;
-use rgb_rpc::Reveal;
+use rgb_core::validation::Validity;
+use rgbstd::containers::Bindle;
+use rgbstd::containers::BuilderSeal;
+use rgbstd::containers::Transfer as RgbTransfer;
+use rgbstd::contract::{ContractId, GraphSeal, SecretSeal};
+use rgbstd::interface::TypedState;
+use rgbstd::persistence::Inventory;
+use rgbstd::Txid as RgbTxid;
+use rgbwallet::RgbTransport;
+use seals::txout::blind::BlindSeal;
+use seals::txout::TxPtr;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use strict_encoding::{FieldName, TypeName};
+
+use std::convert::TryFrom;
 use std::env;
 use std::fs;
 use std::io;
 use std::io::Write;
-use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::ops::Deref;
 use std::path::Path;
@@ -64,15 +69,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use stens::AsciiString;
-use strict_encoding::strict_deserialize;
-use strict_encoding::strict_serialize;
-use strict_encoding::StrictEncode;
 
 const MIN_CREATE_UTXOS_SATS: u64 = 10000;
-const UTXO_NUM: u8 = 10;
+const UTXO_NUM: u8 = 4;
 
-const OPENCHANNEL_MIN_SAT: u64 = 5000;
+const OPENCHANNEL_MIN_SAT: u64 = 5506;
 const OPENCHANNEL_MAX_SAT: u64 = 16777215;
 
 const DUST_LIMIT_MSAT: u64 = 546000;
@@ -84,7 +85,7 @@ const INVOICE_MIN_MSAT: u64 = HTLC_MIN_MSAT;
 #[derive(Serialize, Deserialize)]
 struct BlindedInfo {
 	contract_id: Option<ContractId>,
-	seal: seal::Revealed,
+	seal: BlindSeal<TxPtr>,
 	consumed: bool,
 }
 
@@ -94,7 +95,6 @@ pub(crate) struct LdkUserInfo {
 	pub(crate) bitcoind_rpc_port: u16,
 	pub(crate) bitcoind_rpc_host: String,
 	pub(crate) ldk_storage_dir_path: String,
-	pub(crate) rgb_node_port: u16,
 	pub(crate) ldk_peer_listening_port: u16,
 	pub(crate) ldk_announced_listen_addr: Vec<NetAddress>,
 	pub(crate) ldk_announced_node_name: [u8; 32],
@@ -124,7 +124,7 @@ pub(crate) async fn poll_for_user_input(
 	onion_messenger: Arc<OnionMessenger>, inbound_payments: PaymentInfoStorage,
 	outbound_payments: PaymentInfoStorage, ldk_data_dir: String, network: Network,
 	logger: Arc<disk::FilesystemLogger>, bitcoind_client: Arc<BitcoindClient>,
-	rgb_node_client: Arc<Mutex<Client>>, proxy_client: Arc<RestClient>, proxy_url: &str,
+	proxy_client: Arc<RestClient>, proxy_url: &str, proxy_endpoint: &str,
 	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>, electrum_url: String,
 ) {
 	println!(
@@ -268,14 +268,14 @@ pub(crate) async fn poll_for_user_input(
 						continue;
 					}
 
-					let ticker = AsciiString::from_str(ticker.unwrap());
-					if ticker.is_err() {
+					let ticker = ticker.unwrap();
+					if !ticker.is_ascii() {
 						println!("ERROR: ticker must be an ASCII string");
 						continue;
 					}
 
-					let name = AsciiString::from_str(name.unwrap());
-					if name.is_err() {
+					let name = name.unwrap();
+					if !name.is_ascii() {
 						println!("ERROR: name must be an ASCII string");
 						continue;
 					}
@@ -310,13 +310,16 @@ pub(crate) async fn poll_for_user_input(
 					fs::write(rgb_utxos_path, serialized_utxos)
 						.expect("able to write rgb utxos file");
 
-					let contract_id = rgb_node_client.lock().unwrap().issue_contract(
+					let mut runtime = get_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
+					let contract_id = runtime.issue_contract(
 						amount.unwrap(),
 						outpoint,
-						ticker.unwrap(),
-						name.unwrap(),
+						ticker.to_string(),
+						name.to_string(),
 						precision.unwrap(),
 					);
+					drop(runtime);
+					drop_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
 					println!("Asset ID: {contract_id}");
 				}
 				"assetbalance" => {
@@ -324,7 +327,9 @@ pub(crate) async fn poll_for_user_input(
 					let contract_id = words.next();
 
 					if contract_id.is_none() {
-						println!("ERROR: sendasset has 1 required argument: `{assetbalance_cmd}`");
+						println!(
+							"ERROR: assetbalance has 1 required argument: `{assetbalance_cmd}`"
+						);
 						continue;
 					}
 
@@ -334,9 +339,10 @@ pub(crate) async fn poll_for_user_input(
 						continue;
 					}
 
+					let runtime = get_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
 					let total_rgb_amount = match get_rgb_total_amount(
 						contract_id.unwrap(),
-						rgb_node_client.clone(),
+						&runtime,
 						wallet_arc.clone(),
 						electrum_url.clone(),
 					) {
@@ -346,6 +352,9 @@ pub(crate) async fn poll_for_user_input(
 							continue;
 						}
 					};
+
+					drop(runtime);
+					drop_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
 
 					println!("Asset balance: {total_rgb_amount}");
 				}
@@ -375,9 +384,11 @@ pub(crate) async fn poll_for_user_input(
 						}
 					};
 
+					let mut runtime = get_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
+
 					let total_rgb_amount = match get_rgb_total_amount(
 						contract_id,
-						rgb_node_client.clone(),
+						&runtime,
 						wallet_arc.clone(),
 						electrum_url.clone(),
 					) {
@@ -393,29 +404,49 @@ pub(crate) async fn poll_for_user_input(
 						continue;
 					}
 
+					let blinded_utxo = blinded_utxo.unwrap();
+					let concealed_seal = SecretSeal::from_str(blinded_utxo);
+					if concealed_seal.is_err() {
+						println!("ERROR: blinded_utxo must be a valid RGB blinded UTXO");
+						continue;
+					}
+					let concealed_seal = concealed_seal.unwrap();
+
 					let asset_owned_values = get_asset_owned_values(
 						contract_id,
-						rgb_node_client.clone(),
+						&runtime,
 						wallet_arc.clone(),
 						electrum_url.clone(),
 					)
 					.expect("known contract");
-					let mut rgb_inputs: Vec<OutPoint> = vec![];
+
+					let mut asset_transition_builder = runtime
+						.transition_builder(
+							contract_id,
+							TypeName::try_from("RGB20").unwrap(),
+							None::<&str>,
+						)
+						.expect("ok");
+					let assignment_id = asset_transition_builder
+						.assignments_type(&FieldName::from("beneficiary"))
+						.expect("valid assignment");
+					let mut beneficiaries = vec![];
+
+					let mut rgb_inputs = vec![];
 					let mut input_amount: u64 = 0;
-					for owned_value in asset_owned_values {
+					for (_opout, (outpoint, amount)) in asset_owned_values {
 						if input_amount >= amt_rgb {
 							break;
 						}
-						let outpoint =
-							OutPoint { txid: owned_value.seal.txid, vout: owned_value.seal.vout };
-						rgb_inputs.push(outpoint);
-						input_amount += owned_value.state.value
+						rgb_inputs.push(OutPoint {
+							txid: Txid::from_str(&outpoint.txid.to_string()).unwrap(),
+							vout: outpoint.vout.into_u32(),
+						});
+						input_amount += amount;
 					}
 
-					let wallet = wallet_arc.lock().unwrap();
-
 					let rgb_change_amount = input_amount - amt_rgb;
-					let rgb_change: Vec<AllocatedValue> = if rgb_change_amount > 0 {
+					if rgb_change_amount > 0 {
 						match check_uncolored_utxos(&ldk_data_dir).await {
 							Ok(_) => {}
 							Err(e) => {
@@ -439,20 +470,21 @@ pub(crate) async fn poll_for_user_input(
 							serde_json::to_string(&rgb_utxos).expect("valid rgb utxos");
 						fs::write(rgb_utxos_path, serialized_utxos)
 							.expect("able to write rgb utxos file");
-						vec![AllocatedValue {
-							value: rgb_change_amount,
-							seal: ExplicitSeal::from_str(&format!(
-								"opret1st:{rgb_change_outpoint}"
-							))
-							.expect("valid explicit seal"),
-						}]
-					} else {
-						vec![]
-					};
+						let seal = ExplicitSeal::with(
+							CloseMethod::OpretFirst,
+							RgbTxid::from_str(&rgb_change_outpoint.txid.to_string())
+								.unwrap()
+								.into(),
+							rgb_change_outpoint.vout,
+						);
+						let seal = GraphSeal::from(seal);
+						let change = TypedState::Amount(rgb_change_amount);
+						asset_transition_builder = asset_transition_builder
+							.add_raw_state(assignment_id, seal, change)
+							.unwrap();
+					}
 
-					let btc_outpoints =
-						rgb_inputs.iter().map(|o| OutPoint { txid: o.txid, vout: o.vout });
-					let inputs: BTreeSet<OutPoint> = FromIterator::from_iter(btc_outpoints);
+					let wallet = wallet_arc.lock().unwrap();
 
 					let mut builder = wallet.build_tx();
 					let address = wallet
@@ -462,31 +494,26 @@ pub(crate) async fn poll_for_user_input(
 					builder
 						.add_utxos(&rgb_inputs)
 						.expect("valid utxos")
+						.add_data(&[1])
 						.fee_rate(FeeRate::from_sat_per_vb(FEE_RATE))
 						.manually_selected_only()
 						.drain_to(address.script_pubkey());
 					let psbt = builder.finish().expect("valid psbt finish").0;
 
-					let blinded_utxo = blinded_utxo.unwrap();
-					let concealed_seal = ConcealedSeal::from_str(blinded_utxo);
-					if concealed_seal.is_err() {
-						println!("ERROR: blinded_utxo must be a valid RGB blinded UTXO");
-						continue;
-					}
-					let concealed_seal = concealed_seal.unwrap();
-					let beneficiaries: EndpointValueMap = bmap![
-						SealEndpoint::ConcealedUtxo(concealed_seal) => amt_rgb
-					];
+					asset_transition_builder = asset_transition_builder
+						.add_raw_state(assignment_id, concealed_seal, TypedState::Amount(amt_rgb))
+						.expect("ok");
+					beneficiaries.push(BuilderSeal::Concealed(concealed_seal));
 
-					let mut rgb_client = rgb_node_client.lock().unwrap();
-
-					let (mut psbt, consignment) =
-						rgb_client.send_rgb(contract_id, psbt, inputs, beneficiaries, rgb_change);
+					let (mut psbt, consignment) = runtime.send_rgb(
+						contract_id,
+						psbt,
+						asset_transition_builder,
+						beneficiaries,
+					);
 
 					let consignment_path = format!("{}/consignment", ldk_data_dir.clone());
-					consignment
-						.strict_file_save(consignment_path.clone())
-						.expect("consignment save ok");
+					consignment.save(&consignment_path).expect("successful save");
 
 					let proxy_ref = (*proxy_client).clone();
 					let res = post_consignment(
@@ -505,13 +532,14 @@ pub(crate) async fn poll_for_user_input(
 					let tx = psbt.extract_tx();
 					broadcast_tx(&tx, electrum_url.clone());
 
-					let _status = rgb_client
-						.consume_transfer(consignment, true, None, |_| ())
-						.expect("valid consume tranfer");
+					let transfer =
+						consignment.unbindle().validate(runtime.resolver()).unwrap_or_else(|c| c);
+					let _status = runtime.accept_transfer(transfer, true).expect("valid transfer");
+					drop(runtime);
+					drop_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
 
-					drop(rgb_client);
 					sync_wallet(&wallet, electrum_url.clone());
-					println!("RGB send complete, txid: {}", tx.txid().to_string());
+					println!("RGB send complete, txid: {}", tx.txid());
 				}
 				"receiveasset" => {
 					match check_uncolored_utxos(&ldk_data_dir).await {
@@ -538,11 +566,22 @@ pub(crate) async fn poll_for_user_input(
 					fs::write(rgb_utxos_path, serialized_utxos)
 						.expect("able to write rgb utxos file");
 
-					let seal = Revealed::new(CloseMethod::OpretFirst, outpoint);
+					let seal = ExplicitSeal::with(
+						CloseMethod::OpretFirst,
+						RgbTxid::from_str(&outpoint.txid.to_string()).unwrap().into(),
+						outpoint.vout,
+					);
+					let seal = GraphSeal::from(seal);
+
+					let mut runtime = get_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
+					runtime.store_seal_secret(seal).expect("successful seal store");
+					drop(runtime);
+					drop_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
+
 					let concealed_seal = seal.to_concealed_seal();
 					let blinded_utxo = concealed_seal.to_string();
 
-					let blinded_dir = PathBuf::from_str(&ldk_data_dir)
+					let blinded_dir = PathBuf::from_str(&ldk_data_dir.clone())
 						.expect("valid data dir")
 						.join("blinded_utxos");
 					let blinded_path = blinded_dir.join(&blinded_utxo);
@@ -571,7 +610,7 @@ pub(crate) async fn poll_for_user_input(
 						let blinded_utxo = blinded_info.seal.to_concealed_seal().to_string();
 
 						let proxy_ref = (*proxy_client).clone();
-						let res = get_consignment(proxy_ref, proxy_url, blinded_utxo).await;
+						let res = get_consignment(proxy_ref, proxy_url, blinded_utxo.clone()).await;
 						if res.is_err() || res.as_ref().unwrap().result.is_none() {
 							println!("WARNING: unable to get consignment");
 							continue;
@@ -579,32 +618,38 @@ pub(crate) async fn poll_for_user_input(
 						let consignment = res.unwrap().result.unwrap();
 						let consignment_bytes =
 							base64::decode(consignment).expect("valid consignment");
-						let consignment: StateTransfer =
-							strict_deserialize(consignment_bytes).expect("valid consignment");
+						let consignment_path =
+							format!("{}/consignment_{}", ldk_data_dir.clone(), blinded_utxo);
+						fs::write(consignment_path.clone(), consignment_bytes)
+							.expect("unable to write file");
+						let consignment = Bindle::<RgbTransfer>::load(consignment_path)
+							.expect("successful consignment load");
+						let transfer: RgbTransfer = consignment.clone().unbindle();
 
-						let ser_cons = strict_serialize(&consignment).expect("valid consignment");
-						let contract_consignment: Contract =
-							strict_deserialize(ser_cons).expect("valid serialized consignment");
+						let mut runtime = get_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
 
-						let mut rgb_client = rgb_node_client.lock().unwrap();
-						rgb_client
-							.register_contract(contract_consignment, true, |_| ())
-							.expect("valid contract");
+						let mut minimal_contract = transfer.clone().into_contract();
+						minimal_contract.bundles = none!();
+						minimal_contract.terminals = none!();
+						let minimal_contract_validated =
+							match minimal_contract.clone().validate(runtime.resolver()) {
+								Ok(consignment) => consignment,
+								Err(consignment) => consignment,
+							};
+						runtime
+							.import_contract(minimal_contract_validated)
+							.expect("failure importing issued contract");
 
-						let reveal = Reveal {
-							blinding_factor: blinded_info.seal.blinding,
-							outpoint: OutPoint {
-								txid: blinded_info.seal.txid.unwrap(),
-								vout: blinded_info.seal.vout,
-							},
-							close_method: CloseMethod::OpretFirst,
-							witness_vout: false,
-						};
-						let status = rgb_client
-							.consume_transfer(consignment.clone(), true, Some(reveal), |_| ())
-							.expect("valid consume tranfer");
-						if !matches!(status, ContractValidity::Valid) {
-							println!("WARNING: error consuming transfer");
+						let validated_transfer =
+							transfer.validate(runtime.resolver()).expect("invalid contract");
+						let status = runtime
+							.accept_transfer(validated_transfer, true)
+							.expect("valid transfer");
+						drop(runtime);
+						drop_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
+						let validity = status.validity();
+						if !matches!(validity, Validity::Valid) {
+							println!("WARNING: error accepting transfer");
 							continue;
 						}
 
@@ -689,9 +734,11 @@ pub(crate) async fn poll_for_user_input(
 					}
 					let chan_amt_rgb = chan_amt_rgb.unwrap();
 
+					let runtime = get_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
+
 					let total_rgb_amount = match get_rgb_total_amount(
 						contract_id,
-						rgb_node_client.clone(),
+						&runtime,
 						wallet_arc.clone(),
 						electrum_url.clone(),
 					) {
@@ -701,6 +748,8 @@ pub(crate) async fn poll_for_user_input(
 							continue;
 						}
 					};
+					drop(runtime);
+					drop_rgb_runtime(&PathBuf::from(ldk_data_dir.clone()));
 
 					if chan_amt_rgb > total_rgb_amount {
 						println!("ERROR: do not have enough RGB assets");
@@ -730,7 +779,7 @@ pub(crate) async fn poll_for_user_input(
 						push_amt_msat,
 						announce_channel,
 						channel_manager.clone(),
-						proxy_url,
+						proxy_endpoint,
 					);
 					if open_channel_result.is_err() {
 						continue;
@@ -744,7 +793,7 @@ pub(crate) async fn poll_for_user_input(
 
 					let temporary_channel_id = open_channel_result.unwrap();
 					let channel_rgb_info_path =
-						format!("{}/{}", ldk_data_dir.clone(), hex::encode(&temporary_channel_id));
+						format!("{}/{}", ldk_data_dir.clone(), hex::encode(temporary_channel_id));
 					let rgb_info = RgbInfo {
 						contract_id,
 						local_rgb_amount: chan_amt_rgb,
@@ -1135,7 +1184,10 @@ pub(crate) async fn poll_for_user_input(
 						Err(e) => println!("ERROR: failed to send onion message: {:?}", e),
 					}
 				}
-				"quit" | "exit" => break,
+				"quit" | "exit" => {
+					println!("Exiting node...");
+					break;
+				}
 				_ => println!("Unknown command. See `\"help\" for available commands."),
 			}
 		}
@@ -1270,7 +1322,7 @@ fn list_channels(
 fn invoice_status(inbound_payments: PaymentInfoStorage, invoice: Invoice) {
 	let inbound = inbound_payments.lock().unwrap();
 
-	let payment_hash = PaymentHash(invoice.payment_hash().clone().into_inner());
+	let payment_hash = PaymentHash(invoice.payment_hash().into_inner());
 	match inbound.get(&payment_hash) {
 		Some(v) => {
 			let status_str = match v.status {
@@ -1390,7 +1442,7 @@ fn do_disconnect_peer(
 
 fn open_channel(
 	peer_pubkey: PublicKey, channel_amt_sat: u64, push_amt_msat: u64, announced_channel: bool,
-	channel_manager: Arc<ChannelManager>, proxy_url: &str,
+	channel_manager: Arc<ChannelManager>, proxy_endpoint: &str,
 ) -> Result<[u8; 32], ()> {
 	let config = UserConfig {
 		channel_handshake_limits: ChannelHandshakeLimits {
@@ -1406,8 +1458,7 @@ fn open_channel(
 		..Default::default()
 	};
 
-	let consignment_endpoint =
-		ConsignmentEndpoint::from_str(&format!("rgbhttpjsonrpc:{}", proxy_url)).unwrap();
+	let consignment_endpoint = RgbTransport::from_str(proxy_endpoint).unwrap();
 	match channel_manager.create_channel(
 		peer_pubkey,
 		channel_amt_sat,

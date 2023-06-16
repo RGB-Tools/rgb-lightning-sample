@@ -13,12 +13,10 @@ Cargo.lock
 # RPC auth
 .env
 
-# Test directories
+# Test files
+/cargo_build.log
 /datacore
 /dataindex
 /dataldk0
 /dataldk1
 /dataldk2
-/datargb0
-/datargb1
-/datargb2

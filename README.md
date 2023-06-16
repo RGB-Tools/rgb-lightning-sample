@@ -23,11 +23,8 @@ Also note that the following RGB projects (included in this project as git
 sumbodules) have been modified in order to make the creation of static
 consignments (without entropy) possible. Here links to compare the applied
 changes:
-- [bp-core](https://github.com/RGB-Tools/bp-core/compare/v0.9...static)
-- [client_side_validation](https://github.com/RGB-Tools/client_side_validation/compare/v0.9...static)
-- [rgb-core](https://github.com/RGB-Tools/rgb-core/compare/v0.9.0...static)
-- [rgb-node](https://github.com/RGB-Tools/rgb-node/compare/v0.9.1...static)
-- [rust-rgb20](https://github.com/RGB-Tools/rust-rgb20/compare/v0.9.0...static)
+- [client_side_validation](https://github.com/RGB-Tools/client_side_validation/compare/v0.10.4...static_0.10)
+- [rgb-wallet](https://github.com/RGB-Tools/rgb-wallet/compare/v0.10.3...static_0.10)
 
 But most importantly [rust-lightning] has been changed in order to support
 RGB channels,
@@ -46,15 +43,6 @@ Build the ldk-sample crate:
 cargo build
 ```
 
-Pull the modified RGB node docker image:
-```sh
-docker compose pull
-```
-or build it locally:
-```sh
-docker compose build
-```
-
 ## Usage in a test environment
 
 A test environment has been added for easier testing. It currently supports the
@@ -63,11 +51,7 @@ regtest and testnet networks.
 Instructions and commands are meant to be run from the project's root
 directory.
 
-The included `Dockerfile` builds an RGB node image that is required to add RGB
-functionality to [ldk-sample]. Each ldk node requires its dedicated RGB node.
-
-The `docker-compose.yml` file manages 3 RGB nodes and, when using the regtest
-network, it also manages:
+The `docker-compose.yml` file manages, when using the regtest network:
 - a bitcoind node
 - an electrs instance
 - an [RGB proxy server] instance
@@ -88,35 +72,34 @@ Each ldk node needs to be started in a separate shell with `cargo run`,
 specifying:
 - bitcoind user, password, host and port
 - ldk data directory
-- rgb-node port
 - ldk peer listening port
 - network
 
-Here's an example of how to start three regtest nodes, each one using its own
-rgb-node and the shared regtest services provided by docker compose:
+Here's an example of how to start three regtest nodes, each one using the
+shared regtest services provided by docker compose:
 ```sh
 # 1st shell
-cargo run user:password@localhost:18443 dataldk0/ 63963 9735 regtest
+cargo run user:password@localhost:18443 dataldk0/ 9735 regtest
 
 # 2nd shell
-cargo run user:password@localhost:18443 dataldk1/ 63964 9736 regtest
+cargo run user:password@localhost:18443 dataldk1/ 9736 regtest
 
 # 3rd shell
-cargo run user:password@localhost:18443 dataldk2/ 63965 9737 regtest
+cargo run user:password@localhost:18443 dataldk2/ 9737 regtest
 ```
 
-Here's an example of how to start three testnet nodes, each one using its own
-rgb-node provided by docker compose and external testnet services:
+Here's an example of how to start three testnet nodes, each one using the
+external testnet services:
 
 ```sh
 # 1st shell
-cargo run user:password@electrum.iriswallet.com:18332 dataldk0/ 63963 9735 testnet
+cargo run user:password@electrum.iriswallet.com:18332 dataldk0/ 9735 testnet
 
 # 2nd shell
-cargo run user:password@electrum.iriswallet.com:18332 dataldk1/ 63964 9736 testnet
+cargo run user:password@electrum.iriswallet.com:18332 dataldk1/ 9736 testnet
 
 # 3rd shell
-cargo run user:password@electrum.iriswallet.com:18332 dataldk2/ 63965 9737 testnet
+cargo run user:password@electrum.iriswallet.com:18332 dataldk2/ 9737 testnet
 ```
 
 Once ldk nodes are running, they can be operated via their CLI.
@@ -131,12 +114,9 @@ tests/test.sh --stop
 ```
 
 If needed, more nodes can be added. To do so:
-- add data directories for the additional rgb (`datargb<n>`) and ldk
-  (`dataldk<n>`) nodes
-- add an entry for each additional rgb-node in `docker-compose.yml`, with
-  different exposed port and data directory
+- add data directories for the additional ldk nodes (`dataldk<n>`)
 - run additional `cargo run`s for ldk nodes, specifying the correct bitcoind
-  string, data directory, rgb node port, peer listening port and network
+  string, data directory, peer listening port and network
 
 ## On-chain operations
 

@@ -17,7 +17,8 @@ lightning-background-processor = { version = "0.0.115", features = [ "futures" ]
 lightning-rapid-gossip-sync = { version = "0.0.115" }
 
 base64 = "0.13.0"
-bitcoin = "0.29.2"
+bitcoin_30 = { package = "bitcoin", version = "0.30.0" }
+bitcoin = { package = "bitcoin", version = "0.29.2" }
 bitcoin-bech32 = "0.12"
 bech32 = "0.8"
 hex = "0.3"
@@ -29,35 +30,29 @@ serde_json = { version = "1.0" }
 tokio = { version = "1", features = [ "io-util", "macros", "rt", "rt-multi-thread", "sync", "net", "time" ] }
 
 # RGB and related
-amplify = "3.13.0"
-amplify_num = "0.4.1"
-bdk = { version = "0.27", features = ["electrum", "keys-bip39", "sqlite-bundled"] }
-bp-core = { version = "0.9.0", features = ["psbt", "wallet"], path = "./bp-core" }
+amplify = "=4.0.0"
+bdk = { version = "0.28", features = ["electrum", "keys-bip39", "sqlite-bundled"] }
+bp-core = { version = "=0.10.5", features = ["serde"] }
+bp-seals = "=0.10.5"
 futures = "0.3"
-internet2 = "0.9.0"
-lnpbp = "0.9.0"
-lnpbp-invoice = { version = "0.9.0", features = ["rgb"] }
 miniscript = { version = "8.0", features = ["serde"] }
-psbt = "0.9.0"
 reqwest = { version = "0.11", default-features = false, features = ["json", "multipart", "native-tls", "stream"] }
-rgb-std = "0.9.0"
-rgb20 = { version = "0.9.0", path = "./rust-rgb20" }
-rgb_rpc = { version = "0.9.1", path = "./rgb-node/rpc" }
+rgb-contracts = { version = "=0.10.0-rc.2", features = ["all", "electrum"] }
+rgb_core = { package = "rgb-core", version = "=0.10.5" }
+rgb-schemata = "=0.10.0-rc.1"
+rgb-std = { version = "=0.10.3", features = ["all"] }
+rgb-wallet = { version = "=0.10.3", features = ["all"] }
 serde = { version = "^1.0", features = ["derive"] }
-stens = "0.9.0"
-strict_encoding = "0.9.0"
+strict_encoding = "=2.5.0"
 thiserror = "1.0"
 tokio-util = { version = "0.7.4", features = ["codec"] }
 
 [patch.crates-io]
-bp-core = {  path = "./bp-core" }
-bp-seals = { path = "./bp-core/seals" }
 commit_verify = { path = "./client_side_validation/commit_verify" }
 lightning = { path = "./rust-lightning/lightning" }
 lightning-background-processor = { path = "./rust-lightning/lightning-background-processor"}
-rgb20 = { path = "./rust-rgb20" }
-rgb_core = { package = "rgb-core", path = "./rgb-core" }
-rgb_rpc = { path = "./rgb-node/rpc" }
+rgb-std = { path = "./rgb-wallet/std" }
+rgb-wallet = { path = "./rgb-wallet" }
 
 [profile.release]
 panic = "abort"

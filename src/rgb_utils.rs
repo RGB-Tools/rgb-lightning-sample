@@ -1,187 +1,220 @@
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
-use amplify_num::hex::FromHex;
+use amplify::RawArray;
+use bdk::bitcoin::psbt::PartiallySignedTransaction;
 use bdk::bitcoin::OutPoint;
 use bdk::database::SqliteDatabase;
 use bdk::Wallet;
-use bitcoin::consensus::{deserialize, serialize};
-use bitcoin::hashes::Hash;
-use bitcoin::psbt::serialize::Deserialize as BitcoinDeserialize;
-use bitcoin::psbt::PartiallySignedTransaction;
-use bitcoin::BlockHash;
+use bitcoin_30::hashes::Hash;
+use bitcoin_30::psbt::PartiallySignedTransaction as RgbPsbt;
+use bp::seals::txout::blind::SingleBlindSeal;
 use bp::seals::txout::CloseMethod;
-use internet2::addr::ServiceAddr;
-use lnpbp::chain::{Chain, GENESIS_HASH_REGTEST};
-use psbt::Psbt;
-use rgb::fungible::allocation::{AllocatedValue, OutpointValue};
-use rgb::psbt::RgbExt;
-use rgb::psbt::RgbInExt;
-use rgb::IntoRevealedSeal;
-use rgb::Node;
-use rgb::{
-	AssignedState, Contract, ContractId, EndpointValueMap, InmemConsignment, TransferConsignment,
+use bp::Outpoint as RgbOutpoint;
+use lightning::rgb_utils::STATIC_BLINDING;
+use rgb::Runtime;
+use rgb_core::{Operation, Opout};
+use rgb_schemata::{nia_rgb20, nia_schema};
+use rgbstd::containers::{Bindle, BuilderSeal, Transfer as RgbTransfer};
+use rgbstd::contract::{ContractId, GenesisSeal, GraphSeal};
+use rgbstd::interface::{rgb20, ContractBuilder, TransitionBuilder, TypedState};
+use rgbstd::persistence::Inventory;
+use rgbstd::stl::{
+	Amount, AssetNaming, ContractData, DivisibleAssetSpec, Name, Precision, RicardianContract,
+	Ticker, Timestamp,
 };
-use rgb20::{Asset as Rgb20Asset, Rgb20};
-use rgb_rpc::client::Client;
-use std::collections::{BTreeMap, BTreeSet};
+use rgbstd::Txid as RgbTxid;
+use rgbwallet::psbt::opret::OutputOpret;
+use rgbwallet::psbt::{PsbtDbc, RgbExt, RgbInExt};
+use seals::txout::blind::BlindSeal;
+use seals::txout::{ExplicitSeal, TxPtr};
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use stens::AsciiString;
 
 use crate::bdk_utils::sync_wallet;
 use crate::error::Error;
 
-pub(crate) fn get_rgb_node_client(port: u16, rgb_network: Chain) -> Client {
-	let ip = Ipv4Addr::new(127, 0, 0, 1);
-	let rgb_node_endpoint = ServiceAddr::Tcp(SocketAddr::V4(SocketAddrV4::new(ip, port)));
-	Client::with(rgb_node_endpoint, "rgb-ln-node".to_string(), rgb_network)
-		.expect("Error initializing client")
-}
-
 pub(crate) fn get_rgb_total_amount(
-	contract_id: ContractId, rgb_node_client: Arc<Mutex<Client>>,
-	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>, electrum_url: String,
+	contract_id: ContractId, runtime: &Runtime, wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	electrum_url: String,
 ) -> Result<u64, Error> {
 	let asset_owned_values =
-		get_asset_owned_values(contract_id, rgb_node_client, wallet_arc, electrum_url)?;
-	Ok(asset_owned_values.iter().map(|ov| ov.state.value).sum())
+		get_asset_owned_values(contract_id, runtime, wallet_arc, electrum_url)?;
+	Ok(asset_owned_values.iter().map(|(_, (_, amt))| amt).sum())
 }
 
 pub(crate) fn get_asset_owned_values(
-	contract_id: ContractId, rgb_node_client: Arc<Mutex<Client>>,
-	wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>, electrum_url: String,
-) -> Result<Vec<AssignedState<rgb::value::Revealed>>, Error> {
-	let mut rgb_client = rgb_node_client.lock().unwrap();
-	let contract_state = match rgb_client.contract_state(contract_id) {
-		Ok(cs) => cs,
-		Err(_e) => return Err(Error::UnknownContractId),
-	};
+	contract_id: ContractId, runtime: &Runtime, wallet_arc: Arc<Mutex<Wallet<SqliteDatabase>>>,
+	electrum_url: String,
+) -> Result<BTreeMap<Opout, (RgbOutpoint, u64)>, Error> {
 	let wallet = wallet_arc.lock().unwrap();
 	sync_wallet(&wallet, electrum_url);
 	let unspents_outpoints: Vec<OutPoint> =
 		wallet.list_unspent().expect("valid unspent list").iter().map(|u| u.outpoint).collect();
-	Ok(contract_state
-		.owned_values
-		.into_iter()
-		.filter(|ov| {
-			unspents_outpoints.contains(&OutPoint { txid: ov.seal.txid, vout: ov.seal.vout })
-		})
-		.collect())
+	let outpoints: Vec<RgbOutpoint> = unspents_outpoints
+		.iter()
+		.map(|o| RgbOutpoint::new(RgbTxid::from_str(&o.txid.to_string()).unwrap(), o.vout))
+		.collect();
+	let history = runtime.debug_history().get(&contract_id).ok_or(Error::UnknownContractId)?;
+	let mut contract_state = BTreeMap::new();
+	for output in history.fungibles() {
+		if outpoints.contains(&output.seal) {
+			contract_state.insert(output.opout, (output.seal, output.state.value.as_u64()));
+		}
+	}
+	Ok(contract_state)
+}
+
+pub(crate) fn update_transition_beneficiary(
+	psbt: &PartiallySignedTransaction, beneficiaries: &mut Vec<BuilderSeal<BlindSeal<TxPtr>>>,
+	mut asset_transition_builder: TransitionBuilder, assignment_id: u16, amt_rgb: u64,
+) -> (u32, TransitionBuilder) {
+	let mut seal_vout = 0;
+	if let Some((index, _)) = psbt
+		.clone()
+		.unsigned_tx
+		.output
+		.iter_mut()
+		.enumerate()
+		.find(|(_, o)| o.script_pubkey.is_op_return())
+	{
+		seal_vout = index as u32 ^ 1;
+	}
+	let seal = BuilderSeal::Revealed(GraphSeal::with_vout(
+		CloseMethod::OpretFirst,
+		seal_vout,
+		STATIC_BLINDING,
+	));
+	beneficiaries.push(seal);
+	asset_transition_builder = asset_transition_builder
+		.add_raw_state_static(assignment_id, seal, TypedState::Amount(amt_rgb))
+		.expect("ok");
+	(seal_vout, asset_transition_builder)
 }
 
 pub(crate) trait RgbUtilities {
 	fn issue_contract(
-		&mut self, amount: u64, outpoint: OutPoint, ticker: AsciiString, name: AsciiString,
-		precision: u8,
+		&mut self, amount: u64, outpoint: OutPoint, ticker: String, name: String, precision: u8,
 	) -> ContractId;
 
-	fn send_rgb_internal(
-		&mut self, contract_id: ContractId, psbt: &mut Psbt,
-		input_outpoints_bt: BTreeSet<OutPoint>, beneficiaries: EndpointValueMap,
-		change: Vec<AllocatedValue>,
-	) -> (PartiallySignedTransaction, InmemConsignment<TransferConsignment>);
-
 	fn send_rgb(
 		&mut self, contract_id: ContractId, psbt: PartiallySignedTransaction,
-		input_outpoints_bt: BTreeSet<OutPoint>, beneficiaries: EndpointValueMap,
-		change: Vec<AllocatedValue>,
-	) -> (PartiallySignedTransaction, InmemConsignment<TransferConsignment>);
+		asset_transition_builder: TransitionBuilder, beneficiaries: Vec<BuilderSeal<GraphSeal>>,
+	) -> (PartiallySignedTransaction, Bindle<RgbTransfer>);
 }
 
-impl RgbUtilities for Client {
+impl RgbUtilities for Runtime {
 	fn issue_contract(
-		&mut self, amount: u64, outpoint: OutPoint, ticker: AsciiString, name: AsciiString,
-		precision: u8,
+		&mut self, amount: u64, outpoint: OutPoint, ticker: String, name: String, precision: u8,
 	) -> ContractId {
-		let allocations = vec![OutpointValue::from_str(&format!("{amount}@{outpoint}"))
-			.expect("allocation structure should be correct")];
+		let spec = DivisibleAssetSpec {
+			naming: AssetNaming {
+				ticker: Ticker::try_from(ticker).expect("valid ticker"),
+				name: Name::try_from(name).expect("valid name"),
+				details: None,
+			},
+			precision: Precision::try_from(precision).expect("valid precision"),
+		};
+		let terms = RicardianContract::default();
+		let contract_data = ContractData { terms, media: None };
+		let created_at =
+			SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+		let created = Timestamp::from(i32::try_from(created_at).unwrap());
+		let seal = ExplicitSeal::<RgbTxid>::from_str(&format!("opret1st:{outpoint}")).unwrap();
+		let seal = GenesisSeal::from(seal);
 
-		let rgb_network =
-			Chain::Regtest(BlockHash::from_slice(GENESIS_HASH_REGTEST).expect("valid bloch hash"));
-
-		let asset = Contract::create_rgb20(
-			rgb_network,
-			ticker,
-			name,
-			precision,
-			allocations,
-			BTreeMap::new(),
-			CloseMethod::OpretFirst,
-			None,
-			None,
-		);
-
-		let _rgb_asset =
-			Rgb20Asset::try_from(&asset).expect("create_rgb20 does not match RGB20 schema");
-		self.register_contract(asset.clone(), true, |_| ()).expect("valid contract");
-
-		asset.contract_id()
-	}
-
-	fn send_rgb_internal(
-		&mut self, contract_id: ContractId, psbt: &mut Psbt,
-		input_outpoints_bt: BTreeSet<OutPoint>, beneficiaries: EndpointValueMap,
-		change: Vec<AllocatedValue>,
-	) -> (PartiallySignedTransaction, InmemConsignment<TransferConsignment>) {
-		let contract =
-			self.contract(contract_id, vec![], |_| {}).expect("successful contract call");
-		psbt.set_rgb_contract(contract.clone()).expect("valid contract");
-
-		let revealed_seal = change.into_iter().map(|v| (v.into_revealed_seal(), v.value)).collect();
-
-		let transfer = self
-			.consign(contract_id, vec![], input_outpoints_bt.clone(), |_| ())
-			.expect("valid consign call");
-
-		let rgb_asset =
-			Rgb20Asset::try_from(&transfer).expect("to have provided a valid consignment");
-		let transition = rgb_asset
-			.transfer(input_outpoints_bt.clone(), beneficiaries.clone(), revealed_seal)
-			.expect("transfer should succeed");
-
-		psbt.push_rgb_transition(transition.clone()).expect("valid transition");
-
-		let node_id = transition.node_id();
-
-		for input in &mut psbt.inputs {
-			if input_outpoints_bt.contains(&input.previous_outpoint) {
-				input.set_rgb_consumer(contract_id, node_id).expect("set rgb consumer");
-			}
-		}
-
-		let _count = psbt.rgb_bundle_to_lnpbp4().expect("bundle ok");
-		psbt.outputs
-			.last_mut()
-			.expect("PSBT should have outputs")
-			.set_opret_host()
-			.expect("given output should be valid");
-
-		let endseals = beneficiaries.into_iter().map(|b| b.0).collect();
-
-		let transfers = vec![(transfer, endseals)];
-
-		let transfer_consignment = self
-			.finalize_transfers(transfers, psbt.clone(), |_| ())
-			.expect("finalize should succeed");
-
-		let psbt = transfer_consignment.psbt;
-		let consignment = transfer_consignment.consignments[0].clone();
-		let psbt_serialized =
-			&Vec::<u8>::from_hex(&psbt.to_string()).expect("provided psbt should be valid");
-		let psbt = deserialize(psbt_serialized).expect("valid psbt");
-
-		(psbt, consignment)
+		let builder = ContractBuilder::with(rgb20(), nia_schema(), nia_rgb20())
+			.expect("valid contract builder")
+			.set_chain(self.chain())
+			.add_global_state("spec", spec)
+			.expect("invalid spec")
+			.add_global_state("data", contract_data)
+			.expect("invalid data")
+			.add_global_state("issuedSupply", Amount::from(amount))
+			.expect("invalid issuedSupply")
+			.add_global_state("created", created)
+			.expect("invalid created")
+			.add_fungible_state("assetOwner", seal, amount)
+			.expect("invalid global state data");
+		let contract = builder.issue_contract().expect("failure issuing contract");
+		let contract_id = contract.contract_id();
+		let validated_contract = contract
+			.validate(self.resolver())
+			.expect("internal error: failed validating self-issued contract");
+		self.import_contract(validated_contract).expect("failure importing issued contract");
+		contract_id
 	}
 
 	fn send_rgb(
 		&mut self, contract_id: ContractId, psbt: PartiallySignedTransaction,
-		input_outpoints_bt: BTreeSet<OutPoint>, beneficiaries: EndpointValueMap,
-		change: Vec<AllocatedValue>,
-	) -> (PartiallySignedTransaction, InmemConsignment<TransferConsignment>) {
-		let mut psbt =
-			<Psbt as BitcoinDeserialize>::deserialize(&serialize(&psbt)).expect("valid bdk psbt");
+		asset_transition_builder: TransitionBuilder, beneficiaries: Vec<BuilderSeal<GraphSeal>>,
+	) -> (PartiallySignedTransaction, Bindle<RgbTransfer>) {
+		let mut psbt = RgbPsbt::from_str(&psbt.to_string()).unwrap();
+		let prev_outputs = psbt
+			.unsigned_tx
+			.input
+			.iter()
+			.map(|txin| txin.previous_output)
+			.map(|outpoint| RgbOutpoint::new(outpoint.txid.to_byte_array().into(), outpoint.vout))
+			.collect::<Vec<_>>();
+		let mut asset_transition_builder = asset_transition_builder;
+		for (opout, _state) in
+			self.state_for_outpoints(contract_id, prev_outputs.iter().copied()).expect("ok")
+		{
+			asset_transition_builder =
+				asset_transition_builder.add_input(opout).expect("valid input");
+		}
+		let transition = asset_transition_builder
+			.complete_transition(contract_id)
+			.expect("should complete transition");
+		let mut contract_inputs = HashMap::<ContractId, Vec<RgbOutpoint>>::new();
+		for outpoint in prev_outputs {
+			for id in self.contracts_by_outpoints([outpoint]).expect("ok") {
+				contract_inputs.entry(id).or_default().push(outpoint);
+			}
+		}
+		let inputs = contract_inputs.remove(&contract_id).unwrap_or_default();
+		for (input, txin) in psbt.inputs.iter_mut().zip(&psbt.unsigned_tx.input) {
+			let prevout = txin.previous_output;
+			let outpoint = RgbOutpoint::new(prevout.txid.to_byte_array().into(), prevout.vout);
+			if inputs.contains(&outpoint) {
+				input.set_rgb_consumer(contract_id, transition.id()).expect("ok");
+			}
+		}
+		psbt.push_rgb_transition(transition).expect("ok");
+		let bundles = psbt.rgb_bundles().expect("able to get bundles");
+		let (opreturn_index, _) = psbt
+			.unsigned_tx
+			.output
+			.iter()
+			.enumerate()
+			.find(|(_, o)| o.script_pubkey.is_op_return())
+			.expect("psbt should have an op_return output");
+		let (_, opreturn_output) =
+			psbt.outputs.iter_mut().enumerate().find(|(i, _)| i == &opreturn_index).unwrap();
+		opreturn_output.set_opret_host().expect("cannot set opret host");
+		psbt.rgb_bundle_to_lnpbp4().expect("ok");
+		let anchor = psbt.dbc_conclude_static(CloseMethod::OpretFirst).expect("should conclude");
+		let witness_txid = psbt.unsigned_tx.txid();
+		self.consume_anchor(anchor).expect("should consume anchor");
+		for (id, bundle) in bundles {
+			self.consume_bundle(id, bundle, witness_txid.to_byte_array().into())
+				.expect("should consume bundle");
+		}
+		let beneficiaries: Vec<BuilderSeal<SingleBlindSeal>> = beneficiaries
+			.into_iter()
+			.map(|b| match b {
+				BuilderSeal::Revealed(graph_seal) => BuilderSeal::Revealed(
+					graph_seal.resolve(RgbTxid::from_raw_array(witness_txid.to_byte_array())),
+				),
+				BuilderSeal::Concealed(seal) => BuilderSeal::Concealed(seal),
+			})
+			.collect();
+		let transfer = self.transfer(contract_id, beneficiaries).expect("valid transfer");
 
-		self.send_rgb_internal(contract_id, &mut psbt, input_outpoints_bt, beneficiaries, change)
+		let psbt = PartiallySignedTransaction::from_str(&psbt.to_string()).unwrap();
+
+		(psbt, transfer)
 	}
 }

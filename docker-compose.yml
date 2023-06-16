@@ -1,58 +1,9 @@
 version: '3.8'
 
 services:
-  rgb-node0:
-    container_name: rgb-node0
-    image: rgbtools/rgb-node:0.9-ln
-    build: .
-    environment:
-      MYUID: 1000
-      MYGID: 1000
-      ELECTRUM_URL: ${ELECTRUM_URL}
-      ELECTRUM_PORT: ${ELECTRUM_PORT}
-      RGB_ELECTRUM_SERVER: ${RGB_ELECTRUM_SERVER}
-      NETWORK: ${NETWORK}
-    ports:
-      - 63963:63963
-    volumes:
-      - ./datargb0:/var/lib/rgb
-    working_dir: /var/lib/rgb
-  rgb-node1:
-    container_name: rgb-node1
-    image: rgbtools/rgb-node:0.9-ln
-    build: .
-    environment:
-      MYUID: 1000
-      MYGID: 1000
-      ELECTRUM_URL: ${ELECTRUM_URL}
-      ELECTRUM_PORT: ${ELECTRUM_PORT}
-      RGB_ELECTRUM_SERVER: ${RGB_ELECTRUM_SERVER}
-      NETWORK: ${NETWORK}
-    ports:
-      - 63964:63963
-    volumes:
-      - ./datargb1:/var/lib/rgb
-    working_dir: /var/lib/rgb
-  rgb-node2:
-    container_name: rgb-node2
-    image: rgbtools/rgb-node:0.9-ln
-    build: .
-    environment:
-      MYUID: 1000
-      MYGID: 1000
-      ELECTRUM_URL: ${ELECTRUM_URL}
-      ELECTRUM_PORT: ${ELECTRUM_PORT}
-      RGB_ELECTRUM_SERVER: ${RGB_ELECTRUM_SERVER}
-      NETWORK: ${NETWORK}
-    ports:
-      - 63965:63963
-    volumes:
-      - ./datargb2:/var/lib/rgb
-    working_dir: /var/lib/rgb
   bitcoind:
     container_name: bitcoind
     image: registry.gitlab.com/hashbeam/docker/bitcoind:24.0
-    profiles: ['regtest']
     command: "-fallbackfee=0.0002"
     environment:
       MYUID: 1000
@@ -65,7 +16,6 @@ services:
   electrs:
     container_name: electrs
     image: registry.gitlab.com/hashbeam/docker/electrs:0.9.9
-    profiles: ['regtest']
     environment:
       MYUID: 1000
       MYGID: 1000
@@ -78,6 +28,5 @@ services:
       - 50001:50001
   proxy:
     image: ghcr.io/grunch/rgb-proxy-server:0.1.0
-    profiles: ['regtest']
     ports:
       - 3000:3000
