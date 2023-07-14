@@ -230,22 +230,31 @@ refresh() {
     timestamp
 }
 
-open_channel() {
-    local src_num dst_num dst_port dst_id rgb_amt current_chan_num
+open_colored_channel() {
+    open_colored_channel_custom_sats_amt $1 $2 $3 $4 $5 30010 $6
+}
+
+open_big_colored_channel() {
+    open_colored_channel_custom_sats_amt $1 $2 $3 $4 $5 16777215 $6
+}
+
+open_colored_channel_custom_sats_amt() {
+    local src_num dst_num dst_port dst_id rgb_amt sats_amt current_chan_num
     src_num="$1"
     dst_num="$2"
     dst_port="$3"
     dst_id="$4"
     rgb_amt="$5"
-    current_chan_num="${6:-0}"
+    sats_amt="$6"
+    current_chan_num="${7:-0}"
     _tit "open channel from node $src_num to node $dst_num with $rgb_amt assets"
-    $TMUX_CMD send-keys -t "node$src_num" "openchannel $dst_id@127.0.0.1:$dst_port 30010 1394000 $ASSET_ID $rgb_amt --public" C-m
+    $TMUX_CMD send-keys -t "node$src_num" "opencoloredchannel $dst_id@127.0.0.1:$dst_port $sats_amt 1394000 $ASSET_ID $rgb_amt --public" C-m
     check "$src_num"
-    _wait_for_text_multi $T_1 "node$src_num" "openchannel" "HANDLED ACCEPT CHANNEL"
+    _wait_for_text_multi $T_1 "node$src_num" "opencoloredchannel" "HANDLED ACCEPT CHANNEL"
     timestamp
-    _wait_for_text_multi $T_1 "node$src_num" "openchannel" "FUNDING COMPLETED"
+    _wait_for_text_multi $T_1 "node$src_num" "opencoloredchannel" "FUNDING COMPLETED"
     timestamp
-    _wait_for_text_multi $T_1 "node$src_num" "openchannel" "HANDLED FUNDING SIGNED"
+    _wait_for_text_multi $T_1 "node$src_num" "opencoloredchannel" "HANDLED FUNDING SIGNED"
     timestamp
     check "$dst_num"
     _wait_for_text $T_1 "node$dst_num" "HANDLED OPEN CHANNEL"
@@ -271,6 +280,39 @@ open_channel() {
     CHANNEL_ID=$(echo "$channels" | sed -n "${chan_id_line},${chan_id_line}p" | grep -Eo '[0-9a-f]{64}')
     _out "channel ID: $CHANNEL_ID"
 }
+
+open_vanilla_channel() {
+    local src_num dst_num dst_port dst_id msat_amount
+    src_num="$1"
+    dst_num="$2"
+    dst_port="$3"
+    dst_id="$4"
+    msat_amount="$5"
+    _tit "open channel from node $src_num to node $dst_num of $msat_amount mSAT"
+    $TMUX_CMD send-keys -t "node$src_num" "openchannel $dst_id@127.0.0.1:$dst_port $msat_amount 546000 --public" C-m
+    check $src_num
+    _wait_for_text_multi $T_1 "node$src_num" "openchannel" "HANDLED ACCEPT CHANNEL"
+    timestamp
+    _wait_for_text_multi $T_1 "node$src_num" "openchannel" "FUNDING COMPLETED"
+    timestamp
+    _wait_for_text_multi $T_1 "node$src_num" "openchannel" "HANDLED FUNDING SIGNED"
+    timestamp
+    check $dst_num
+    _wait_for_text $T_1 "node$dst_num" "HANDLED OPEN CHANNEL"
+    timestamp
+    _wait_for_text_multi $T_1 "node$dst_num" "HANDLED OPEN CHANNEL" "HANDLED FUNDING CREATED"
+    timestamp
+
+    mine 6
+    sleep 3
+
+    $TMUX_CMD send-keys -t "node$src_num" "listchannels" C-m
+    sleep 1
+    CHANNEL_ID=$(_wait_for_text 5 "node$src_num" "[^_]channel_id:" \
+        | head -1 | grep -Eo '[0-9a-f]{64}')
+    _out "channel ID: $CHANNEL_ID"
+}
+
 
 list_channels() {
     local node_num chan_num lines text matches
@@ -373,7 +415,7 @@ forceclose_channel() {
     mine 1
 }
 
-keysend_init() {
+colored_keysend_init() {
     local src_num dst_num dst_id rgb_amt
     src_num="$1"
     dst_num="$2"
@@ -381,21 +423,21 @@ keysend_init() {
     rgb_amt="$4"
 
     _tit "send $rgb_amt assets off-chain from node $src_num to node $dst_num"
-    $TMUX_CMD send-keys -t "node$src_num" "keysend $dst_id 3000000 $ASSET_ID $rgb_amt" C-m
+    $TMUX_CMD send-keys -t "node$src_num" "coloredkeysend $dst_id 3000000 $ASSET_ID $rgb_amt" C-m
     timestamp
     check "$src_num"
     _wait_for_text_multi $T_1 "node$src_num" "keysend" "EVENT: initiated sending"
     timestamp
 }
 
-keysend() {
+colored_keysend() {
     local src_num dst_num dst_id rgb_amt
     src_num="$1"
     dst_num="$2"
     dst_id="$3"
     rgb_amt="$4"
 
-    keysend_init "$src_num" "$dst_num" "$dst_id" "$rgb_amt"
+    colored_keysend_init "$src_num" "$dst_num" "$dst_id" "$rgb_amt"
 
     _wait_for_text_multi $T_1 "node$src_num" "keysend" "EVENT: successfully sent payment"
     timestamp
@@ -411,13 +453,68 @@ keysend() {
     timestamp
 }
 
-get_invoice() {
+keysend_init() {
+    local src_num dst_num dst_id sats_amt
+    src_num="$1"
+    dst_num="$2"
+    dst_id="$3"
+    sats_amt="$4"
+
+    _tit "send $sats_amt sats off-chain from node $src_num to node $dst_num"
+    $TMUX_CMD send-keys -t "node$src_num" "keysend $dst_id $sats_amt" C-m
+    timestamp
+    check "$src_num"
+    _wait_for_text_multi $T_1 "node$src_num" "keysend" "EVENT: initiated sending"
+    timestamp
+}
+
+keysend() {
+    local src_num dst_num dst_id sats_amt
+    src_num="$1"
+    dst_num="$2"
+    dst_id="$3"
+    sats_amt="$4"
+
+    keysend_init "$src_num" "$dst_num" "$dst_id" "$sats_amt"
+
+    _wait_for_text_multi $T_1 "node$src_num" "keysend" "EVENT: successfully sent payment"
+    timestamp
+    _wait_for_text_multi $T_1 "node$src_num" "EVENT: successfully sent payment" "HANDLED REVOKE AND ACK"
+    timestamp
+
+    check "$dst_num"
+    _wait_for_text $T_1 "node$dst_num" "EVENT: received payment"
+    timestamp
+    _wait_for_text_multi $T_1 "node$dst_num" "EVENT: received payment" "Event::PaymentClaimed end"
+    timestamp
+    _wait_for_text_multi $T_1 "node$dst_num" "Event::PaymentClaimed end" "HANDLED COMMITMENT SIGNED"
+    timestamp
+}
+
+get_colored_invoice() {
     local num rgb_amt text pattern
     num="$1"
     rgb_amt="$2"
 
     _tit "get invoice for $rgb_amt assets from node $num"
-    $TMUX_CMD send-keys -t "node$num" "getinvoice 3000000 900 $ASSET_ID $rgb_amt" C-m
+    $TMUX_CMD send-keys -t "node$num" "getcoloredinvoice 3000000 900 $ASSET_ID $rgb_amt" C-m
+    timestamp
+    check "$num"
+    pattern="SUCCESS: generated invoice: "
+    INVOICE="$(_wait_for_text_multi $T_1 "node$num" \
+        'getcoloredinvoice' "$pattern" 3 | sed "s/$pattern//" \
+        |grep -Eo '^[0-9a-z]+$' | sed -E ':a; N; $!ba; s/[\n ]//g')"
+    timestamp
+    _out "invoice: $INVOICE"
+}
+
+get_vanilla_invoice() {
+    local num msat_amount text pattern
+    num="$1"
+    msat_amount="$2"
+
+    _tit "get invoice for $msat_amount mSATs from node $num"
+    $TMUX_CMD send-keys -t node$num "getinvoice $msat_amount 900" C-m
     timestamp
     check "$num"
     pattern="SUCCESS: generated invoice: "
@@ -500,4 +597,157 @@ check_channel_reestablish() {
     check "$num"
     _wait_for_text_multi $T_1 "node$num" "$prevtext" "HANDLED CHANNEL READY" >/dev/null
     timestamp
+}
+
+send_swap() {
+    local node exchange swaptype amt_msat amt_asset
+    node="$1"
+    exchange="$2"
+    swaptype="$3"
+    amt_msat="$4"
+    amt_asset="$5"
+
+    _tit "node $node swapping ($swaptype) $amt_msat msats for $amt_asset $ASSET_ID through node $exchange"
+    $TMUX_CMD send-keys -t node$node "sendswap $exchange $swaptype $amt_msat $ASSET_ID $amt_asset" C-m
+    timestamp
+    check $node
+    _wait_for_text_multi $T_1 node$node "sendswap" "EVENT: initiated swap"
+    timestamp
+    _wait_for_text_multi $T_1 node$node "sendswap" "EVENT: successfully sent payment"
+    timestamp
+    _wait_for_text $T_1 node$node "EVENT: received payment"
+    timestamp
+    _wait_for_text $T_1 node$node "Event::PaymentClaimed end"
+    timestamp
+    _wait_for_text_multi $T_1 node$node "Event::PaymentClaimed end" "HANDLED COMMITMENT SIGNED"
+    timestamp
+}
+
+maker_init() {
+    local node amount asset side price timeout
+    node="$1"
+    amount="$2"
+    side="$3"
+    timeout="$4"
+    price="$5"
+
+    _tit "node $node initializating trade (mm-side): swapping ($side) $amount of $ASSET_ID at $price msats/asset"
+    timestamp
+    $TMUX_CMD send-keys -t node$node "makerinit $amount $ASSET_ID $side $timeout $price" C-m
+    swap_string=$(_wait_for_text 5 node$node "SUCCESS! swap_string =" |awk '{print $NF}')
+    payment_secret=$(_wait_for_text 5 node$node "payment_secret: " |awk '{print $NF}')
+    _out "swap_string: $swap_string"
+    _out "payment_secret: $payment_secret"
+    sleep 1
+}
+maker_init_amount_failure() {
+    local node amount asset side price timeout
+    node="$1"
+    amount="$2"
+    side="$3"
+    timeout="$4"
+    price="$5"
+
+    _tit "node $node initializating trade (mm-side): swapping ($side) $amount of $ASSET_ID at $price msats/asset"
+    timestamp
+    $TMUX_CMD send-keys -t node$node "makerinit $amount $ASSET_ID $side $timeout $price" C-m
+    _wait_for_text 5 node$node "ERROR: do not have enough RGB assets"
+}
+
+taker() {
+    local node
+    node="$1"
+
+    _tit "node $node taking the trade $swap_string"
+    $TMUX_CMD send-keys -t node$node "taker $swap_string" C-m
+    taker_pk=$(_wait_for_text 5 node$node "our_pk: " |awk '{print $NF}')
+    _out "taker_pk: $taker_pk"
+    sleep 1
+}
+
+taker_expect_timeout() {
+    local node
+    node="$1"
+
+    _tit "node $node taking the trade $swap_string"
+    $TMUX_CMD send-keys -t node$node "taker $swap_string" C-m
+    _wait_for_text_multi $T_1 node$node "taker" "ERROR: the swap offer has already expired"
+    timestamp
+}
+
+taker_amount_failure() {
+    local node
+    node="$1"
+
+    _tit "node $node taking the trade $swap_string"
+    $TMUX_CMD send-keys -t node$node "taker $swap_string" C-m
+    _wait_for_text 5 node$node "ERROR: do not have enough RGB assets"
+}
+
+taker_list() {
+    local node text trades_num text
+    node="$1"
+    trades_num="$2"
+
+    lines=$((trades_num*9))
+
+    _tit "listing whitelisted taker trades on node $node"
+    $TMUX_CMD send-keys -t node$node "tradeslist taker" C-m
+    text="$(_wait_for_text 5 "node$node" "tradeslist taker" $lines)"
+    echo "$text"
+    matches=$(echo "$text" | grep -c "side: .*")
+    [ "$matches" = "$trades_num" ] || _exit "not enough trades"
+}
+
+maker_list() {
+    local node text trades_num text
+    node="$1"
+    trades_num="$2"
+
+    lines=$((trades_num*10))
+
+    _tit "listing whitelisted maker trades on node $node"
+    $TMUX_CMD send-keys -t node$node "tradeslist maker" C-m
+    text="$(_wait_for_text 5 "node$node" "tradeslist maker" $lines)"
+    echo "$text"
+    matches=$(echo "$text" | grep -c "side: .*")
+    [ "$matches" = "$trades_num" ] || _exit "not enough trades"
+}
+
+maker_execute() {
+    local node
+    node="$1"
+
+    _tit "node $node completing the trade..."
+    $TMUX_CMD send-keys -t node$node "makerexecute $swap_string $payment_secret $taker_pk" C-m
+    timestamp
+    _wait_for_text_multi $T_1 node$node "makerexecute" "EVENT: initiated swap"
+    timestamp
+    _wait_for_text_multi $T_1 node$node "makerexecute" "EVENT: successfully sent payment"
+    timestamp
+    _wait_for_text $T_1 node$node "EVENT: received payment"
+    timestamp
+    _wait_for_text $T_1 node$node "Event::PaymentClaimed end"
+    timestamp
+    _wait_for_text_multi $T_1 node$node "Event::PaymentClaimed end" "HANDLED COMMITMENT SIGNED"
+    timestamp
+
+}
+
+maker_execute_expect_failure() {
+    local node taker_pk
+    node="$1"
+    taker_pk="$2"
+    failure_node="$3"
+
+    _tit "node $node completing the trade..."
+    $TMUX_CMD send-keys -t node$node "makerexecute $swap_string $payment_secret $taker_pk" C-m
+    timestamp
+    _wait_for_text_multi $T_1 node$node "makerexecute" "EVENT: initiated swap"
+    timestamp
+    _wait_for_text $T_1 node$failure_node "ERROR: rejecting non-whitelisted swap"
+    timestamp
+    _wait_for_text_multi $T_1 node$node "makerexecute" "EVENT: Failed to send payment to payment hash .* RetriesExhausted>"
+    timestamp
+
 }

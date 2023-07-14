@@ -19,7 +19,7 @@ send_assets 1 400
 asset_balance 1 600
 
 # open channel
-open_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 500
+open_colored_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 500
 channel12_id="$CHANNEL_ID"
 list_channels 1
 list_channels 2
@@ -30,14 +30,14 @@ refresh 2
 asset_balance 2 400
 
 # open channel
-open_channel 2 3 "$NODE3_PORT" "$NODE3_ID" 400 1
+open_colored_channel 2 3 "$NODE3_PORT" "$NODE3_ID" 400 1
 channel23_id="$CHANNEL_ID"
 list_channels 2 2
 list_channels 3
 asset_balance 2 0
 
 # send assets and exit intermediate node while payment is goind through
-keysend_init 1 3 "$NODE3_ID" 50
+colored_keysend_init 1 3 "$NODE3_ID" 50
 _wait_for_text "$T_1" node2 "HANDLED UPDATE ADD HTLC"
 timestamp
 _wait_for_text "$T_1" node2 "HANDLED REVOKE AND ACK"

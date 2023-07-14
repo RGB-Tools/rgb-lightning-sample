@@ -19,7 +19,7 @@ send_assets 1 400
 asset_balance 1 600
 
 # open channel
-open_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 500
+open_colored_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 500
 channel12_id="$CHANNEL_ID"
 list_channels 1
 list_channels 2
@@ -30,14 +30,17 @@ refresh 2
 asset_balance 2 400
 
 # open channel
-open_channel 2 3 "$NODE3_PORT" "$NODE3_ID" 300 1
+open_colored_channel 2 3 "$NODE3_PORT" "$NODE3_ID" 300 1
 channel23_id="$CHANNEL_ID"
 list_channels 2 2
 list_channels 3
 asset_balance 2 100
 
-# send assets
-keysend 1 3 "$NODE3_ID" 50
+
+# send payment
+get_colored_invoice 3 50
+send_payment 1 3 "$INVOICE"
+
 list_channels 1
 list_channels 2 2
 list_channels 3

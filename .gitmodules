@@ -4,7 +4,7 @@
 	shallow = true
 [submodule "rust-lightning"]
 	path = rust-lightning
-	url = git@github.com:RGB-Tools/rust-lightning.git
+	url = git@github.com:danielabrozzoni/rust-lightning.git
 	shallow = true
 [submodule "rgb-wallet"]
 	path = rgb-wallet

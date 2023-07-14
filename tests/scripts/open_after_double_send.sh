@@ -27,14 +27,14 @@ refresh 2
 asset_balance 2 300
 
 # open channel
-open_channel 2 1 "$NODE1_PORT" "$NODE1_ID" 250
+open_colored_channel 2 1 "$NODE1_PORT" "$NODE1_ID" 250
 list_channels 1
 list_channels 2
 asset_balance 1 700
 asset_balance 2 50
 
 ## send assets
-keysend 2 1 "$NODE1_ID" 50
+colored_keysend 2 1 "$NODE1_ID" 50
 list_channels 1
 list_channels 2
 list_payments 1

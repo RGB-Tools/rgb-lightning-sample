@@ -223,7 +223,7 @@ listchannels
 ```
 
 ### Sending assets
-To send RGB assets over the LN network, call the `keysend` command followed by:
+To send RGB assets over the LN network, call the `coloredkeysend` command followed by:
 - the receiving peer's pubkey
 - the bitcoin amount in satoshis
 - the RGB asset's contract ID
@@ -231,10 +231,10 @@ To send RGB assets over the LN network, call the `keysend` command followed by:
 
 Example:
 ```
-keysend 03ddf2eedb06d5bbd128ccd4f558cb4a7428bfbe359259c718db7d2a8eead169fb 2000000 rgb1lfxs4dmqs7a90vrz0yaje60fakuvu9u9esx882shy437yxazmysqamnv2r 10
+coloredkeysend 03ddf2eedb06d5bbd128ccd4f558cb4a7428bfbe359259c718db7d2a8eead169fb 2000000 rgb1lfxs4dmqs7a90vrz0yaje60fakuvu9u9esx882shy437yxazmysqamnv2r 10
 ```
 
-At the moment, only the `keysend` command has been modified to support RGB
+At the moment, only the `coloredkeysend` command has been modified to support RGB
 functionality. The invoice-based `sendpayment` will be added in the future.
 
 ### Closing channels
