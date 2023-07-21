@@ -8,36 +8,57 @@ get_node_ids
 # create RGB UTXOs
 create_utxos 1
 create_utxos 2
+create_utxos 3
 
 # issue asset
 issue_asset
 
-# open channel (1)
-open_channel 1 2 "$NODE2_PORT" "$node2_id" 1000
+# open channel
+open_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 600
 list_channels 1
 list_channels 2
+asset_balance 1 400
 
-# send assets (1)
-keysend 1 2 "$node2_id" 100
+# send assets
+keysend 1 2 "$NODE2_ID" 100
 list_channels 1
 list_channels 2
+list_payments 1
+list_payments 2
 
-# close channel (1)
-close_channel 1 2 "$node2_id"
-asset_balance 1
-asset_balance 2
+# close channel
+close_channel 1 2 "$NODE2_ID"
+asset_balance 1 900
+asset_balance 2 100
 
-# open channel (2)
-open_channel 1 2 "$NODE2_PORT" "$node2_id" 600
+# open channel
+open_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 500
 list_channels 1
 list_channels 2
+asset_balance 1 400
 
-# send assets (2)
-keysend 1 2 "$node2_id" 50
+# send assets
+keysend 1 2 "$NODE2_ID" 100
 list_channels 1
 list_channels 2
+list_payments 1
+list_payments 2
 
-# close channel (2)
-close_channel 1 2 "$node2_id"
-asset_balance 1
-asset_balance 2
+# close channel
+close_channel 1 2 "$NODE2_ID"
+asset_balance 1 800
+asset_balance 2 200
+
+# spend RGB assets on-chain
+_skip_remaining
+blind 3
+send_assets 1 700
+blind 3
+send_assets 2 150
+mine 1
+refresh 3
+asset_balance 1 100
+asset_balance 2 50
+asset_balance 3 850
+
+exit 0

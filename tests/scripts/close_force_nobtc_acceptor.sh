@@ -7,24 +7,28 @@ get_node_ids
 
 # create RGB UTXOs
 create_utxos 1
-create_utxos 2
+#create_utxos 2
+create_utxos 3
 
 # issue asset
 issue_asset
 
 # open channel
-open_channel 1 2 "$NODE2_PORT" "$node2_id" 1000
+open_channel 1 2 "$NODE2_PORT" "$NODE2_ID" 600
 list_channels 1
 list_channels 2
+asset_balance 1 400
 
 # send assets
-keysend 1 2 "$node2_id" 100
+keysend 1 2 "$NODE2_ID" 100
 list_channels 1
 list_channels 2
 list_payments 1
 list_payments 2
 
 # force-close channel
-forceclose_channel 1 2 "$node2_id"
-asset_balance 1
-asset_balance 2
+forceclose_channel 1 2 "$NODE2_ID"
+asset_balance 1 900
+asset_balance 2 100
+
+exit 0

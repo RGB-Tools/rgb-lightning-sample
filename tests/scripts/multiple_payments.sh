@@ -19,31 +19,41 @@ list_channels 1
 list_channels 2
 asset_balance 1 400
 
-# get invoice
-get_invoice 2 100
-
-# send payment
+# send assets (3 times)
+get_invoice 2 1
 send_payment 1 2 "$INVOICE"
 list_channels 1
 list_channels 2
 list_payments 1
 list_payments 2
+get_invoice 2 2
+send_payment 1 2 "$INVOICE"
+list_channels 1
+list_channels 2
+list_payments 1 2
+list_payments 2 2
+get_invoice 2 3
+send_payment 1 2 "$INVOICE"
+list_channels 1
+list_channels 2
+list_payments 1 3
+list_payments 2 3
 
 # close channel
 close_channel 1 2 "$NODE2_ID"
-asset_balance 1 900
-asset_balance 2 100
+asset_balance 1 994
+asset_balance 2 6
 
-# spend assets
+# spend RGB assets on-chain
 _skip_remaining
 blind 3
 send_assets 1 700
 blind 3
-send_assets 2 50
+send_assets 2 6
 mine 1
 refresh 3
-asset_balance 1 200
-asset_balance 2 50
-asset_balance 3 750
+asset_balance 1 294
+asset_balance 2 0
+asset_balance 3 706
 
 exit 0

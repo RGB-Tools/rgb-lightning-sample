@@ -19,22 +19,19 @@ list_channels 1
 list_channels 2
 asset_balance 1 400
 
-# get invoice
-get_invoice 2 100
-
-# send payment
-send_payment 1 2 "$INVOICE"
+# send assets
+keysend 1 2 "$NODE2_ID" 100
 list_channels 1
 list_channels 2
 list_payments 1
 list_payments 2
 
-# close channel
-close_channel 1 2 "$NODE2_ID"
+# force-close channel
+forceclose_channel 1 2 "$NODE2_ID"
 asset_balance 1 900
 asset_balance 2 100
 
-# spend assets
+# spend RGB assets on-chain
 _skip_remaining
 blind 3
 send_assets 1 700
