@@ -52,7 +52,7 @@ use lightning::rgb_utils::{
 use lightning::routing::gossip;
 use lightning::routing::gossip::{NodeId, P2PGossipSync};
 use lightning::routing::router::DefaultRouter;
-use lightning::util::config::UserConfig;
+use lightning::util::config::{ChannelHandshakeConfig, UserConfig};
 use lightning::util::ser::ReadableArgs;
 use lightning_background_processor::{process_events_async, GossipSync};
 use lightning_block_sync::init;
@@ -146,6 +146,8 @@ pub(crate) type ChannelManager =
 	SimpleArcChannelManager<ChainMonitor, BitcoindClient, BitcoindClient, FilesystemLogger>;
 
 pub(crate) type NetworkGraph = gossip::NetworkGraph<Arc<FilesystemLogger>>;
+
+pub (crate) const HTLC_MIN_MSAT: u64 = 3000000;
 
 type OnionMessenger = SimpleArcOnionMessenger<FilesystemLogger>;
 
@@ -1049,7 +1051,13 @@ async fn start_ldk() {
 	));
 
 	// Step 11: Initialize the ChannelManager
-	let mut user_config = UserConfig::default();
+	let mut user_config = UserConfig {
+		channel_handshake_config: ChannelHandshakeConfig {
+			our_htlc_minimum_msat: HTLC_MIN_MSAT,
+			..Default::default()
+		},
+		..Default::default()
+	};
 	user_config.channel_handshake_limits.force_announced_channel_preference = false;
 	let mut restarting_node = true;
 	let (channel_manager_blockhash, channel_manager) = {

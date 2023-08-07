@@ -10,7 +10,7 @@ use crate::rgb_utils::get_rgb_total_amount;
 use crate::rgb_utils::RgbUtilities;
 use crate::{
 	ChannelManager, HTLCStatus, MillisatAmount, NetworkGraph, OnionMessenger, PaymentInfo,
-	PaymentInfoStorage, PeerManager,
+	PaymentInfoStorage, PeerManager, HTLC_MIN_MSAT,
 };
 use crate::{FEE_RATE, UTXO_SIZE_SAT};
 
@@ -77,8 +77,6 @@ const OPENCHANNEL_MIN_SAT: u64 = 5506;
 const OPENCHANNEL_MAX_SAT: u64 = 16777215;
 
 const DUST_LIMIT_MSAT: u64 = 546000;
-
-const HTLC_MIN_MSAT: u64 = 3000000;
 
 const INVOICE_MIN_MSAT: u64 = HTLC_MIN_MSAT;
 
