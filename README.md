@@ -2,6 +2,11 @@
 
 RGB-enabled LN node based on [ldk-sample].
 
+Please notice that an RGB-enabled LN node daemon is available in the
+[rgb-lightning-node] repository. For any application interested in integrating
+RGB on lightning it is recommended to use the node as this sample has less
+features and is less maintained.
+
 The node enables the possibility to create payment channels containing assets
 issued using the RGB protocol, as well as routing RGB asset denominated
 payments across multiple channels, given that they all possess the necessary
@@ -290,4 +295,5 @@ at your option.
 [ldk-sample]: https://github.com/lightningdevkit/ldk-sample
 [off-chain]: #off-chain-operations
 [on-chain]: #on-chain-operations
+[rgb-lightning-node]: https://github.com/RGB-Tools/rgb-lightning-node
 [rust-lightning]: https://github.com/lightningdevkit/rust-lightning
