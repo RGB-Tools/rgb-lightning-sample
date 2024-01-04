@@ -1,3 +1,11 @@
+# Archived project
+This repository is no longer being maintained and has been archived for
+historical purposes.
+
+Development has moved to the
+[rgb-lightning-node](https://github.com/RGB-Tools/rgb-lightning-node) project,
+which is the evolution of this CLI sample to a daemon controlled via REST APIs.
+
 # RGB Lightning Sample
 
 RGB-enabled LN node based on [ldk-sample].
